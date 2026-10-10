@@ -4,7 +4,7 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { BlocksTable } from "@/components/blocks-table";
 import { WalletSearch } from "@/components/miner-search";
 import { Box, Empty, Skeleton } from "@/components/ui";
-import { formatAmount, formatHashrate } from "@/lib/format";
+import { formatHashrate } from "@/lib/format";
 import { getBlocks, getCoins } from "@/lib/queries";
 
 export default function Home() {
@@ -20,7 +20,7 @@ export default function Home() {
             <li>No registration is required. Use your wallet address as the username.</li>
             <li>We do payouts in the currency you mine.</li>
             <li>
-              Payouts are made automatically for all balances above the minimum shown under Pool Status, as soon as the
+              Payouts are made automatically for all balances above the minimum shown on the Pool page, as soon as the
               blocks have matured. The transaction fee of a payout is shared by its recipients.
             </li>
             <li>Blocks are distributed proportionally among the most recent valid shares (PPLNS).</li>
@@ -59,7 +59,7 @@ async function StratumServers() {
         <li>
           &lt;WALLET_ADDRESS&gt; must be valid for the currency you mine. <b>Do not use an address of another coin.</b>
         </li>
-        <li>See the &quot;Pool Status&quot; area for ALGO and PORT numbers.</li>
+        <li>See the &quot;Pool Status&quot; area for ALGO and the Pool page for the PORT of each coin.</li>
         <li>
           As optional password, use <b>-p m=solo</b> to mine solo: you keep every block you find and get nothing from
           other miners&apos; blocks.
@@ -82,8 +82,16 @@ async function StratumServers() {
   );
 }
 
+/** Distinct values of one column within an algo, e.g. "3334, 3335". */
+function distinct<T>(values: (T | null)[], format: (value: T) => string): string {
+  const present = values.filter((value): value is T => value !== null).map(format);
+  return present.length === 0 ? "–" : [...new Set(present)].join(", ");
+}
+
+/** One row per algorithm, as in YiiMP; the Pool page lists the individual coins. */
 async function PoolStatus() {
   const coins = await getCoins();
+  const algos = [...new Set(coins.map((coin) => coin.algo))].sort();
   return (
     <Box title="Pool Status">
       {coins.length === 0 ? (
@@ -93,32 +101,31 @@ async function PoolStatus() {
           <thead>
             <tr>
               <th>Algo</th>
-              <th>Coin</th>
               <th className="right">Port</th>
+              <th className="right">Coins</th>
               <th className="right">Miners</th>
               <th className="right">Hashrate</th>
               <th className="right">Fees</th>
               <th className="right">Solo</th>
-              <th className="right">Min. pay</th>
             </tr>
           </thead>
           <tbody>
-            {coins.map((coin) => (
-              <tr key={coin.symbol}>
-                <td>
-                  <b>{coin.algo}</b>
-                </td>
-                <td>
-                  {coin.name} ({coin.symbol})
-                </td>
-                <td className="right">{coin.stratumPort ?? "–"}</td>
-                <td className="right">{coin.miners}</td>
-                <td className="right">{formatHashrate(coin.hashrate)}</td>
-                <td className="right">{coin.poolFeePercent === null ? "–" : `${coin.poolFeePercent}%`}</td>
-                <td className="right">{coin.soloFeePercent === null ? "–" : `${coin.soloFeePercent}%`}</td>
-                <td className="right">{coin.minPayout === null ? "–" : formatAmount(coin.minPayout, 2)}</td>
-              </tr>
-            ))}
+            {algos.map((algo) => {
+              const members = coins.filter((coin) => coin.algo === algo);
+              return (
+                <tr key={algo}>
+                  <td>
+                    <b>{algo}</b>
+                  </td>
+                  <td className="right">{distinct(members.map((coin) => coin.stratumPort), String)}</td>
+                  <td className="right">{members.length}</td>
+                  <td className="right">{members.reduce((sum, coin) => sum + coin.miners, 0)}</td>
+                  <td className="right">{formatHashrate(members.reduce((sum, coin) => sum + coin.hashrate, 0))}</td>
+                  <td className="right">{distinct(members.map((coin) => coin.poolFeePercent), (fee) => `${fee}%`)}</td>
+                  <td className="right">{distinct(members.map((coin) => coin.soloFeePercent), (fee) => `${fee}%`)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
