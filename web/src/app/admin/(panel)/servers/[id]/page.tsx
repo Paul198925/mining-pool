@@ -112,7 +112,12 @@ async function Server({ params }: Pick<PageProps<"/admin/servers/[id]">, "params
                 <th>Since</th>
                 <th className="right">CPU</th>
                 <th className="right">Memory</th>
-                <th className="right">Data</th>
+                <th
+                  className="right"
+                  title="Size of the service's data folder. For a coin node that is its part of the blockchain (nodes keep about 4 GB of blocks), the chain state and, on a wallet node, the wallet and its copies."
+                >
+                  Data on disk
+                </th>
                 <th>Image</th>
               </tr>
             </thead>
