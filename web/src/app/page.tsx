@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Suspense } from "react";
 
 import { AutoRefresh } from "@/components/auto-refresh";
@@ -118,7 +119,9 @@ async function PoolStatus() {
               return (
                 <tr key={algo}>
                   <td>
-                    <b>{algo}</b>
+                    <b>
+                      <Link href={`/algo/${algo}`}>{algo}</Link>
+                    </b>
                   </td>
                   <td className="right">{distinct(members.map((coin) => coin.stratumPort), String)}</td>
                   <td className="right">{members.length}</td>

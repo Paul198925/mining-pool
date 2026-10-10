@@ -123,16 +123,18 @@ export async function getStratumServers(): Promise<StratumServer[]> {
   return rows;
 }
 
-export async function getBlocks(limit: number): Promise<Block[]> {
+/** The latest blocks, of all coins or only of those with the given algorithm. */
+export async function getBlocks(limit: number, algo?: string): Promise<Block[]> {
   await connection();
   const { rows } = await db().query(
     `SELECT b.id, c.symbol, b.height, b.hash, b.status, b.confirmations, c.block_maturity, b.reward,
             b.network_difficulty, a.payout_address AS finder, b.solo,
             b.party_id IS NOT NULL AS party, b.found_at
      FROM blocks b JOIN coins c ON c.id = b.coin_id JOIN accounts a ON a.id = b.account_id
+     WHERE $2::text IS NULL OR c.algo = $2
      ORDER BY b.found_at DESC, b.id DESC
      LIMIT $1`,
-    [limit],
+    [limit, algo ?? null],
   );
   return rows.map((r) => ({
     id: r.id,
