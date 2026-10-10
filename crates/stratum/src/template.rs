@@ -9,6 +9,7 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 
 use crate::{
+    chain::Chain,
     job::{BlockTemplate, Job},
     pool::Pool,
 };
@@ -21,10 +22,11 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 pub async fn run(
     rpc: RpcClient,
     pool: Arc<Pool>,
-    request: Value,
+    chain: Chain,
     payout_script: Vec<u8>,
     jobs: watch::Sender<Option<Arc<Job>>>,
 ) {
+    let request: Value = chain.template_request();
     let mut last: Option<(String, Vec<String>, Instant)> = None;
     let mut last_error = None;
     let mut next_id = 1u64;
@@ -60,7 +62,7 @@ pub async fn run(
             continue;
         }
 
-        match Job::new(format!("{next_id:x}"), pool.chain, &template, &payout_script, clean) {
+        match Job::new(format!("{next_id:x}"), chain, &template, &payout_script, clean) {
             Ok(job) => {
                 next_id += 1;
                 if clean {

@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, ensure};
 use futures_util::{SinkExt, StreamExt};
 use pool_common::{
     config::{Coin, Config, Stratum},
@@ -31,13 +31,13 @@ use tokio_util::codec::{Framed, LinesCodec};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    accounts::WorkerIds,
+    accounts::{Candidate, WorkerIds},
     algo::Algo,
     chain::Chain,
     job::{FoundBlock, Job},
-    pool::Pool,
+    pool::{Pool, Port},
     recorder::{BlockEvent, Recorder, ShareEvent},
-    session::{AcceptedShare, Session},
+    session::{AcceptedShare, Login, Session},
     vardiff::VarDiffConfig,
 };
 
@@ -47,15 +47,23 @@ const VARDIFF_TICK: Duration = Duration::from_secs(30);
 
 type JobFeed = watch::Receiver<Option<Arc<Job>>>;
 
-/// What every connection needs besides its own socket.
+/// One coin on a port: its daemon, its current work and where its shares are stored.
 #[derive(Clone)]
-struct Server {
-    pool: Arc<Pool>,
-    rpc: RpcClient,
-    db: PgPool,
+struct CoinCtx {
+    symbol: String,
     coin_id: i32,
+    rpc: RpcClient,
+    pool: Arc<Pool>,
     recorder: Recorder,
     jobs: JobFeed,
+}
+
+/// What every connection on a port needs besides its own socket.
+#[derive(Clone)]
+struct Server {
+    port: Arc<Port>,
+    db: PgPool,
+    coins: Arc<Vec<CoinCtx>>,
 }
 
 #[tokio::main]
@@ -67,15 +75,15 @@ async fn main() -> Result<()> {
 
     let mut recorders = Vec::new();
     for listener in &cfg.stratum {
-        let coin = cfg
-            .coins
-            .iter()
-            .find(|c| c.symbol == listener.coin)
-            .ok_or_else(|| anyhow!("stratum coin {} is not configured under [[coins]]", listener.coin))?;
-        let recorder = start_listener(listener, coin, db.clone())
+        let coins: Vec<&Coin> = cfg.coins.iter().filter(|coin| coin.algo == listener.algo).collect();
+        ensure!(!coins.is_empty(), "no coin under [[coins]] uses algo {}", listener.algo);
+        let started = start_listener(listener, &coins, db.clone())
             .await
-            .with_context(|| format!("starting stratum for {}", coin.symbol))?;
-        recorders.push(recorder);
+            .with_context(|| format!("starting stratum for {}", listener.algo))?;
+        recorders.extend(started);
+    }
+    for coin in cfg.coins.iter().filter(|coin| !cfg.stratum.iter().any(|listener| listener.algo == coin.algo)) {
+        warn!(coin = %coin.symbol, algo = %coin.algo, "no [[stratum]] port for this coin's algo, it will not be mined");
     }
 
     tokio::signal::ctrl_c().await?;
@@ -86,18 +94,16 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Sets up everything one coin needs and starts accepting miners on its port.
-async fn start_listener(settings: &Stratum, coin: &Coin, db: PgPool) -> Result<Recorder> {
-    let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
-    let recorder = Recorder::spawn(db.clone(), coin_id);
-    // Published so the website can tell miners where to connect.
-    let port: Option<i32> = settings.listen.rsplit(':').next().and_then(|port| port.parse().ok());
-    sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1").bind(coin_id).bind(port).execute(&db).await?;
-    let rpc = RpcClient::new(coin)?;
-    let payout_script = payout_script(&rpc, coin).await?;
-    let chain = Chain::from_name(&coin.chain)?;
-    let pool = Arc::new(Pool::new(
-        Algo::from_name(&coin.algo)?,
+/// Sets up every coin of one algorithm and starts accepting miners on the algorithm's port.
+async fn start_listener(settings: &Stratum, coins: &[&Coin], db: PgPool) -> Result<Vec<Recorder>> {
+    // The extranonce layout is announced at subscribe, before the miner names a coin.
+    let chain = Chain::from_name(&coins[0].chain)?;
+    ensure!(
+        coins.iter().all(|coin| coin.chain == coins[0].chain),
+        "coins sharing a port must have the same chain type"
+    );
+    let port = Arc::new(Port::new(
+        Algo::from_name(&settings.algo)?,
         chain,
         VarDiffConfig {
             start: settings.start_difficulty,
@@ -106,14 +112,31 @@ async fn start_listener(settings: &Stratum, coin: &Coin, db: PgPool) -> Result<R
             share_target_secs: settings.share_target_secs,
         },
     ));
+    let port_number: Option<i32> = settings.listen.rsplit(':').next().and_then(|port| port.parse().ok());
 
-    let (job_tx, job_rx) = watch::channel(None);
-    let request = chain.template_request(&coin.algo);
-    tokio::spawn(template::run(rpc.clone(), pool.clone(), request, payout_script, job_tx));
-    let ctx = Server { pool, rpc, db, coin_id, recorder: recorder.clone(), jobs: job_rx };
+    let mut contexts = Vec::new();
+    for coin in coins {
+        let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
+        // Published so the website can tell miners where to connect.
+        sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1")
+            .bind(coin_id)
+            .bind(port_number)
+            .execute(&db)
+            .await?;
+        let rpc = RpcClient::new(coin)?;
+        let payout_script = payout_script(&rpc, coin).await.with_context(|| format!("coin {}", coin.symbol))?;
+        let pool = Arc::new(Pool::default());
+        let (job_tx, jobs) = watch::channel(None);
+        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, payout_script, job_tx));
+        let recorder = Recorder::spawn(db.clone(), coin_id);
+        contexts.push(CoinCtx { symbol: coin.symbol.clone(), coin_id, rpc, pool, recorder, jobs });
+    }
+    let recorders = contexts.iter().map(|coin| coin.recorder.clone()).collect();
+    let symbols: Vec<&str> = coins.iter().map(|coin| coin.symbol.as_str()).collect();
+    let ctx = Server { port, db, coins: Arc::new(contexts) };
 
     let listener = TcpListener::bind(&settings.listen).await.with_context(|| format!("binding {}", settings.listen))?;
-    info!(listen = %settings.listen, coin = %coin.symbol, algo = %coin.algo, "stratum listening");
+    info!(listen = %settings.listen, algo = %settings.algo, coins = %symbols.join(","), "stratum listening");
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
@@ -132,7 +155,7 @@ async fn start_listener(settings: &Stratum, coin: &Coin, db: PgPool) -> Result<R
             }
         }
     });
-    Ok(recorder)
+    Ok(recorders)
 }
 
 /// The output script block rewards are paid to.
@@ -152,10 +175,11 @@ async fn payout_script(rpc: &RpcClient, coin: &Coin) -> Result<Vec<u8>> {
 }
 
 async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
-    let mut jobs = ctx.jobs.clone();
     stream.set_nodelay(true)?;
     let mut lines = Framed::new(stream, LinesCodec::new_with_max_length(MAX_LINE_BYTES));
-    let mut session = Session::new(ctx.pool.clone(), Instant::now());
+    let mut session = Session::new(ctx.port.clone(), Instant::now());
+    // Set at login, when the miner's coin is known.
+    let mut coin: Option<CoinCtx> = None;
     let mut tick = tokio::time::interval(VARDIFF_TICK);
     let mut last_message = tokio::time::Instant::now();
     debug!(%peer, "connected");
@@ -165,30 +189,31 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
             line = lines.next() => {
                 let Some(line) = line else { return Ok(()) };
                 last_message = tokio::time::Instant::now();
-                let current = jobs.borrow().clone();
-                let mut out = session.handle_line(&line?, current.as_deref(), Instant::now());
-                if let Some(share) = out.share {
-                    record_share(&ctx, share);
+                let mut out = session.handle_line(&line?, current_job(&coin).as_deref(), Instant::now());
+                if let (Some(share), Some(coin)) = (out.share, &coin) {
+                    record_share(coin, share);
                 }
                 if let Some(request) = out.auth {
-                    let worker = accounts::resolve(&ctx.db, &ctx.rpc, ctx.coin_id, &request.user, &request.password).await;
-                    let worker = worker.unwrap_or_else(|err| {
+                    let login = login(&ctx, &coin, &request.user, &request.password).await.unwrap_or_else(|err| {
                         warn!(%peer, "authorize failed: {err:#}");
                         None
                     });
-                    out.lines.push(session.finish_authorize(request, worker));
+                    let reply = match login {
+                        Some((mut chosen, worker)) => {
+                            let current = chosen.jobs.borrow_and_update().clone();
+                            let login = Login { worker, pool: chosen.pool.clone() };
+                            debug!(%peer, coin = %chosen.symbol, "authorized");
+                            coin = Some(chosen);
+                            session.finish_authorize(request, Some(login), current.as_deref())
+                        }
+                        None => session.finish_authorize(request, None, None),
+                    };
+                    out.lines.extend(reply);
                 }
                 out.lines
             }
-            changed = jobs.changed() => {
-                changed?;
-                let job = jobs.borrow_and_update().clone();
-                job.and_then(|job| session.on_job(&job)).into_iter().collect()
-            }
-            _ = tick.tick() => {
-                let current = jobs.borrow().clone();
-                session.on_tick(current.as_deref(), Instant::now())
-            }
+            job = next_job(&mut coin) => job.and_then(|job| session.on_job(&job)).into_iter().collect(),
+            _ = tick.tick() => session.on_tick(current_job(&coin).as_deref(), Instant::now()),
             _ = tokio::time::sleep_until(last_message + IDLE_TIMEOUT) => {
                 warn!(%peer, "idle timeout");
                 return Ok(());
@@ -200,15 +225,49 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
     }
 }
 
-fn record_share(ctx: &Server, share: AcceptedShare) {
+fn current_job(coin: &Option<CoinCtx>) -> Option<Arc<Job>> {
+    coin.as_ref().and_then(|coin| coin.jobs.borrow().clone())
+}
+
+/// Resolves when the connection's coin publishes a new job; never before login.
+async fn next_job(coin: &mut Option<CoinCtx>) -> Option<Arc<Job>> {
+    if let Some(coin) = coin
+        && coin.jobs.changed().await.is_ok()
+    {
+        return coin.jobs.borrow_and_update().clone();
+    }
+    std::future::pending().await
+}
+
+/// Finds the coin and account a login is for. A connection stays with its first coin.
+async fn login(
+    ctx: &Server,
+    current: &Option<CoinCtx>,
+    user: &str,
+    password: &str,
+) -> Result<Option<(CoinCtx, WorkerIds)>> {
+    let candidates: Vec<Candidate> = ctx
+        .coins
+        .iter()
+        .filter(|coin| current.as_ref().is_none_or(|current| current.coin_id == coin.coin_id))
+        .map(|coin| Candidate { coin_id: coin.coin_id, symbol: &coin.symbol, rpc: &coin.rpc })
+        .collect();
+    let Some((index, worker)) = accounts::resolve(&ctx.db, &candidates, user, password).await? else {
+        return Ok(None);
+    };
+    let coin_id = candidates[index].coin_id;
+    Ok(ctx.coins.iter().find(|coin| coin.coin_id == coin_id).map(|coin| (coin.clone(), worker)))
+}
+
+fn record_share(coin: &CoinCtx, share: AcceptedShare) {
     let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let AcceptedShare { worker, difficulty, block } = share;
     let WorkerIds { account_id, worker_id, solo, party_id } = worker;
-    ctx.recorder.share(ShareEvent { account_id, worker_id, solo, party_id, difficulty, at });
+    coin.recorder.share(ShareEvent { account_id, worker_id, solo, party_id, difficulty, at });
     if let Some(block) = block {
-        let ctx = ctx.clone();
+        let coin = coin.clone();
         tokio::spawn(async move {
-            if submit_block(&ctx.rpc, &block).await {
+            if submit_block(&coin.rpc, &block).await {
                 let event = BlockEvent {
                     account_id,
                     worker_id,
@@ -220,9 +279,9 @@ fn record_share(ctx: &Server, share: AcceptedShare) {
                     network_difficulty: block.network_difficulty,
                     at,
                 };
-                ctx.recorder.block(event).await;
+                coin.recorder.block(event).await;
             }
-            ctx.pool.refresh.notify_one();
+            coin.pool.refresh.notify_one();
         });
     }
 }

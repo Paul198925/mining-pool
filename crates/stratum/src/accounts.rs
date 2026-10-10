@@ -22,26 +22,46 @@ enum Mode {
     Party(String),
 }
 
+/// A coin served on the port the miner connected to.
+pub struct Candidate<'a> {
+    pub coin_id: i32,
+    pub symbol: &'a str,
+    pub rpc: &'a RpcClient,
+}
+
 /// Resolves a stratum login. The username is `<payout address>[.<worker name>]`; the password
-/// carries comma-separated options as in Yiimp, of which `m=solo` and `m=party.<name>` are understood.
-/// Returns `None` if the address is not valid for the coin.
+/// carries comma-separated options as in Yiimp: `c=<SYMBOL>` picks the coin, `m=solo` and
+/// `m=party.<name>` the reward mode.
+///
+/// Without `c=`, the coin is the first one on the port for which the address is valid.
+/// Returns the index of the chosen candidate, or `None` if no coin accepts the login.
 pub async fn resolve(
     db: &PgPool,
-    rpc: &RpcClient,
-    coin_id: i32,
+    candidates: &[Candidate<'_>],
     user: &str,
     password: &str,
-) -> Result<Option<WorkerIds>> {
+) -> Result<Option<(usize, WorkerIds)>> {
     let (address, worker) = user.split_once('.').unwrap_or((user, ""));
-    // Cheap rejection of junk before asking the daemon.
+    // Cheap rejection of junk before asking the daemons.
     let plausible = (20..=100).contains(&address.len()) && address.chars().all(|c| c.is_ascii_alphanumeric());
     if !plausible || worker.len() > 64 {
         return Ok(None);
     }
-    let info: Value = rpc.call("validateaddress", json!([address])).await?;
-    if info["isvalid"] != true {
-        return Ok(None);
+    let wanted = coin_option(password);
+    let mut chosen = None;
+    for (index, candidate) in candidates.iter().enumerate() {
+        if wanted.is_some_and(|symbol| !symbol.eq_ignore_ascii_case(candidate.symbol)) {
+            continue;
+        }
+        let info: Value = candidate.rpc.call("validateaddress", json!([address])).await?;
+        if info["isvalid"] == true {
+            chosen = Some((index, candidate.coin_id));
+            break;
+        }
     }
+    let Some((index, coin_id)) = chosen else {
+        return Ok(None);
+    };
 
     let account_id: i64 = sqlx::query_scalar(
         "INSERT INTO accounts (payout_coin_id, payout_address) VALUES ($1, $2)
@@ -77,7 +97,15 @@ pub async fn resolve(
         }
         _ => None,
     };
-    Ok(Some(WorkerIds { account_id, worker_id, solo: mode == Mode::Solo, party_id }))
+    Ok(Some((index, WorkerIds { account_id, worker_id, solo: mode == Mode::Solo, party_id })))
+}
+
+/// The symbol from a `c=<SYMBOL>` password option.
+fn coin_option(password: &str) -> Option<&str> {
+    password.split(',').map(str::trim).find_map(|option| {
+        let (key, symbol) = option.split_once('=')?;
+        (key.eq_ignore_ascii_case("c") && !symbol.is_empty()).then_some(symbol)
+    })
 }
 
 /// The first recognised `m=` option wins; anything else means ordinary pool mining.
@@ -106,6 +134,14 @@ mod tests {
         assert_eq!(mode("x"), Mode::Pool);
         assert_eq!(mode(""), Mode::Pool);
         assert_eq!(mode("m=solo2"), Mode::Pool);
+    }
+
+    #[test]
+    fn coin_is_picked_with_c() {
+        assert_eq!(coin_option("c=CHI"), Some("CHI"));
+        assert_eq!(coin_option("m=solo, C=rod"), Some("rod"));
+        assert_eq!(coin_option("x"), None);
+        assert_eq!(coin_option("c="), None);
     }
 
     #[test]

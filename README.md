@@ -55,7 +55,9 @@ docker compose exec dogecoin dogecoin-cli -regtest -rpcport=18332 -rpcuser=pool 
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner
 ```
 
-Für Xaya (Neoscrypt, Port 3334) gibt es einen eigenen Test-Miner; die Adresse kommt vom Xaya-Node:
+Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334). Laufen mehrere Coins auf einem Port, erkennt der Server die Coin an der Adresse; mit `c=<SYMBOL>` im Passwort legt der Miner sie selbst fest.
+
+Für Xaya und SpaceXpanse gibt es einen eigenen Test-Miner; die Adresse kommt vom Xaya-Node:
 
 ```bash
 docker compose exec xaya xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpassword=pooldev getnewaddress
@@ -65,9 +67,9 @@ docker compose exec xaya xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpass
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner-xaya
 ```
 
-SpaceXpanse (Port 3335) nutzt denselben Miner mit `MINER_PORT=3335` und einer Adresse vom `spacexpanse`-Node (`spacexpanse-cli`, RPC-Port 18499).
+SpaceXpanse nutzt denselben Miner und Port mit einer Adresse vom `spacexpanse`-Node (`spacexpanse-cli`, RPC-Port 18499).
 
-Solo- und Party-Mining wählt der Miner über das Passwort: `MINER_PASSWORD=m=solo` oder `MINER_PASSWORD=m=party.<Name>` vor denselben Befehl setzen.
+Solo- und Party-Mining wählt der Miner ebenfalls über das Passwort: `MINER_PASSWORD=m=solo` oder `MINER_PASSWORD=m=party.<Name>` vor denselben Befehl setzen. Mehrere Optionen werden mit Komma getrennt.
 
 Block-Belohnungen werden erst nach 60 Bestätigungen gutgeschrieben und ausgezahlt. Auf Regtest erzeugt man die Bestätigungen mit `generate 61`.
 

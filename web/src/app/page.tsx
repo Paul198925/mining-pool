@@ -59,21 +59,25 @@ async function StratumServers() {
         <li>
           &lt;WALLET_ADDRESS&gt; must be valid for the currency you mine. <b>Do not use an address of another coin.</b>
         </li>
-        <li>See the &quot;Pool Status&quot; area for ALGO and the Pool page for the PORT of each coin.</li>
+        <li>See the &quot;Pool Status&quot; area for ALGO and PORT numbers.</li>
         <li>
-          As optional password, use <b>-p m=solo</b> to mine solo: you keep every block you find and get nothing from
+          The coin is recognised from your wallet address. As optional password, you can use{" "}
+          <b>-p c=&lt;SYMBOL&gt;</b> to name it yourself.
+        </li>
+        <li>
+          Add <b>m=solo</b> to mine solo: you keep every block you find and get nothing from
           other miners&apos; blocks.
         </li>
         <li>
-          Use <b>-p m=party.&lt;NAME&gt;</b> to mine in a private group: everyone using the same name shares the blocks
-          the group finds.
+          Add <b>m=party.&lt;NAME&gt;</b> to mine in a private group: everyone using the same name shares the blocks
+          the group finds. Separate several options with commas, e.g. <b>-p c=DOGE,m=solo</b>.
         </li>
         {example && (
           <li>
             Example:
             <p className="cmdline">
               -a {example.algo} -o stratum+tcp://{host}:{example.stratumPort} -u &lt;{example.symbol}_ADDRESS&gt;.rig1
-              -p x
+              -p c={example.symbol}
             </p>
           </li>
         )}

@@ -7,7 +7,7 @@ use serde::Deserialize;
 pub struct Config {
     pub database: Database,
     pub redis: Redis,
-    /// One listener per coin.
+    /// One listener per algorithm.
     #[serde(default)]
     pub stratum: Vec<Stratum>,
     pub accounting: Accounting,
@@ -28,8 +28,8 @@ pub struct Redis {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Stratum {
     pub listen: String,
-    /// Symbol of the coin this listener serves.
-    pub coin: String,
+    /// The algorithm this port serves; every coin with this `algo` is mined here.
+    pub algo: String,
     pub start_difficulty: f64,
     pub min_difficulty: f64,
     pub max_difficulty: f64,

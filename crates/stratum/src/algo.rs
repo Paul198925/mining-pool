@@ -18,7 +18,8 @@ impl Algo {
     pub fn from_name(name: &str) -> Result<Self> {
         match name {
             "scrypt" => Ok(Self::Scrypt),
-            "neoscrypt" => Ok(Self::Neoscrypt),
+            // "neoscrypt-xaya" is what miners call Neoscrypt over Xaya's block layout.
+            "neoscrypt" | "neoscrypt-xaya" => Ok(Self::Neoscrypt),
             other => bail!("unsupported algo: {other}"),
         }
     }

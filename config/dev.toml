@@ -7,9 +7,11 @@ url = "postgres://pool:pooldev@127.0.0.1:55432/pool"
 [redis]
 url = "redis://127.0.0.1:56379"
 
+# One port per algorithm. Miners pick the coin with "c=<SYMBOL>" in the password;
+# without it the coin is recognised from the payout address.
 [[stratum]]
 listen = "127.0.0.1:3333"
-coin = "DOGE"
+algo = "scrypt"
 start_difficulty = 0.1
 min_difficulty = 0.001
 max_difficulty = 1000000.0
@@ -17,15 +19,7 @@ share_target_secs = 15.0
 
 [[stratum]]
 listen = "127.0.0.1:3334"
-coin = "CHI"
-start_difficulty = 0.01
-min_difficulty = 0.0001
-max_difficulty = 1000000.0
-share_target_secs = 15.0
-
-[[stratum]]
-listen = "127.0.0.1:3335"
-coin = "ROD"
+algo = "neoscrypt-xaya"
 start_difficulty = 0.01
 min_difficulty = 0.0001
 max_difficulty = 1000000.0
@@ -50,7 +44,7 @@ min_payout = 1.0
 [[coins]]
 symbol = "CHI"
 name = "Xaya"
-algo = "neoscrypt"
+algo = "neoscrypt-xaya"
 chain = "xaya"
 rpc_url = "http://127.0.0.1:18493"
 rpc_user = "pool"
@@ -61,7 +55,7 @@ min_payout = 1.0
 [[coins]]
 symbol = "ROD"
 name = "SpaceXpanse"
-algo = "neoscrypt"
+algo = "neoscrypt-xaya"
 chain = "xaya"
 rpc_url = "http://127.0.0.1:18499"
 rpc_user = "pool"
