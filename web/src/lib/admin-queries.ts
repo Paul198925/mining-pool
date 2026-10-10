@@ -20,6 +20,9 @@ export type CoinFinance = {
   ledgerSum: string;
   walletBalance: string | null;
   walletCheckedAt: Date | null;
+  /** null until pool-core has reached the wallet node. */
+  walletEncrypted: boolean | null;
+  walletBackupAt: Date | null;
   payoutsSending: number;
   oldestSendingAt: Date | null;
   blocksPending: number;
@@ -34,7 +37,7 @@ export async function getFinances(): Promise<CoinFinance[]> {
     `COALESCE((SELECT sum(amount) FROM ledger_entries WHERE coin_id = c.id AND system_account = '${name}'), 0)`;
   const blocks = (where: string) => `(SELECT count(*) FROM blocks WHERE coin_id = c.id AND ${where})`;
   const { rows } = await db().query(
-    `SELECT c.symbol, c.name, c.wallet_balance, c.wallet_checked_at,
+    `SELECT c.symbol, c.name, c.wallet_balance, c.wallet_checked_at, c.wallet_encrypted, c.wallet_backup_at,
             -${book("mined")} AS mined,
             ${book("pool_fee")} AS pool_fee,
             ${book("paid_out")} AS paid_out,
@@ -67,6 +70,8 @@ export async function getFinances(): Promise<CoinFinance[]> {
     ledgerSum: r.ledger_sum,
     walletBalance: r.wallet_balance,
     walletCheckedAt: r.wallet_checked_at,
+    walletEncrypted: r.wallet_encrypted,
+    walletBackupAt: r.wallet_backup_at,
     payoutsSending: Number(r.payouts_sending),
     oldestSendingAt: r.oldest_sending_at,
     blocksPending: Number(r.blocks_pending),

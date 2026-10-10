@@ -2,6 +2,7 @@ mod blocks;
 mod payouts;
 mod pplns;
 mod stats;
+mod wallet;
 
 use std::time::{Duration, Instant};
 
@@ -67,6 +68,12 @@ async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) 
         if !has_address {
             // Fails quietly until the wallet node is reachable; the stats warning above covers that.
             has_address = stats::publish_pool_address(&db, &rpc, coin_id, &coin).await.unwrap_or(false);
+        }
+        // Before payouts: a wallet that was just encrypted must not be asked to send while unlocked state is unknown.
+        if let Err(err) = wallet::secure(&db, &rpc, coin_id, &coin).await {
+            warn!(coin = %coin.symbol, "securing the wallet failed: {err:#}");
+        } else if let Err(err) = wallet::backup(&db, &rpc, coin_id, &coin).await {
+            warn!(coin = %coin.symbol, "wallet backup failed: {err:#}");
         }
         if let Err(err) = stats::refresh_wallet_balance(&db, &rpc, coin_id).await {
             warn!(coin = %coin.symbol, "reading the wallet balance failed: {err:#}");

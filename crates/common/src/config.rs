@@ -75,6 +75,12 @@ pub struct Coin {
     pub rpc_password: String,
     /// Where block rewards go. Unset means "ask the daemon wallet", which is only sane in dev.
     pub pool_address: Option<String>,
+    /// Encrypts the pool wallet and unlocks it for payouts. Comes from the environment.
+    #[serde(default)]
+    pub wallet_passphrase: Option<String>,
+    /// Directory inside the wallet node where it writes daily wallet backups.
+    #[serde(default = "default_backup_dir")]
+    pub wallet_backup_dir: Option<String>,
     /// The chain's coinbase maturity: confirmations before a block reward can be spent.
     pub block_maturity: i64,
     /// Balances below this many coins are not paid out yet.
@@ -83,6 +89,11 @@ pub struct Coin {
 
 fn default_chain() -> String {
     "bitcoin".into()
+}
+
+/// Every node image of this project keeps its data in /data.
+fn default_backup_dir() -> Option<String> {
+    Some("/data".into())
 }
 
 impl Config {
@@ -109,7 +120,7 @@ impl Config {
     /// - `DATABASE_URL`
     /// - `POOL_INSTANCE_ID`, `POOL_REGION`, `POOL_STRATUM_HOST`
     /// - per coin, with its symbol: `POOL_RPC_URL_<SYMBOL>`, `POOL_RPC_USER_<SYMBOL>`,
-    ///   `POOL_RPC_PASSWORD_<SYMBOL>`, `POOL_ADDRESS_<SYMBOL>`
+    ///   `POOL_RPC_PASSWORD_<SYMBOL>`, `POOL_ADDRESS_<SYMBOL>`, `POOL_WALLET_PASSPHRASE_<SYMBOL>`
     fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> Result<()> {
         if let Some(url) = var("DATABASE_URL") {
             self.database.url = url;
@@ -136,6 +147,9 @@ impl Config {
             }
             if let Some(address) = var(&format!("POOL_ADDRESS_{symbol}")) {
                 coin.pool_address = Some(address);
+            }
+            if let Some(passphrase) = var(&format!("POOL_WALLET_PASSPHRASE_{symbol}")) {
+                coin.wallet_passphrase = Some(passphrase);
             }
         }
         Ok(())

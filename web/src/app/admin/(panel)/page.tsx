@@ -6,6 +6,7 @@ import { type CoinFinance, getFinances, getServers } from "@/lib/admin-queries";
 import { formatAge, formatAmount } from "@/lib/format";
 
 const STUCK_AFTER_MS = 10 * 60 * 1000;
+const BACKUP_OVERDUE_MS = 48 * 60 * 60 * 1000;
 
 export default function AdminOverview() {
   return (
@@ -35,6 +36,12 @@ function problems(coins: CoinFinance[], liveServers: number, unreachable: string
     }
     if (coin.walletBalance !== null && BigInt(coin.walletBalance) < owed(coin)) {
       found.push(`${coin.symbol}: the wallet holds less than the pool owes its miners.`);
+    }
+    if (coin.walletEncrypted === false) {
+      found.push(`${coin.symbol}: the pool wallet is not encrypted.`);
+    }
+    if (coin.walletEncrypted !== null && (!coin.walletBackupAt || Date.now() - coin.walletBackupAt.getTime() > BACKUP_OVERDUE_MS)) {
+      found.push(`${coin.symbol}: the pool wallet has not been backed up in the last two days.`);
     }
     if (coin.oldestSendingAt && Date.now() - coin.oldestSendingAt.getTime() > STUCK_AFTER_MS) {
       found.push(`${coin.symbol}: ${coin.payoutsSending} payout(s) have been "sending" since ${formatAge(coin.oldestSendingAt)}.`);
@@ -119,6 +126,37 @@ async function Overview() {
           <li>
             Mined = pool income + paid out + tx fees + miner balances. &quot;Wallet − owed&quot; is the spendable
             wallet balance minus miner balances and queued payouts; it must not be negative.
+          </li>
+        </ul>
+      </Box>
+
+      <Box title="Pool wallets">
+        <table className="datagrid">
+          <thead>
+            <tr>
+              <th>Coin</th>
+              <th className="right">Spendable</th>
+              <th>Encrypted</th>
+              <th className="right">Last backup on the node</th>
+            </tr>
+          </thead>
+          <tbody>
+            {coins.map((coin) => (
+              <tr key={coin.symbol}>
+                <td>
+                  <b>{coin.symbol}</b>
+                </td>
+                <td className="right">{coin.walletBalance === null ? "–" : formatAmount(coin.walletBalance, 2)}</td>
+                <td>{coin.walletEncrypted === null ? "no wallet node" : coin.walletEncrypted ? "yes" : "no"}</td>
+                <td className="right">{coin.walletBackupAt ? formatAge(coin.walletBackupAt) : "never"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <ul>
+          <li>
+            The backup is a copy on the wallet node itself. It does not survive the loss of that server; keep copies
+            elsewhere too.
           </li>
         </ul>
       </Box>

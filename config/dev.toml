@@ -52,5 +52,7 @@ chain = "xaya"
 rpc_url = "http://127.0.0.1:18499"
 rpc_user = "pool"
 rpc_password = "pooldev"
+# Dev-only: exercises the encrypted-wallet path. Dogecoin above stays unencrypted on purpose.
+wallet_passphrase = "pooldev"
 block_maturity = 120
 min_payout = 1.0

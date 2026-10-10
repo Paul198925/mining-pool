@@ -7,6 +7,8 @@ use serde_json::{Map, Value, json};
 use sqlx::PgPool;
 use tracing::{error, info, warn};
 
+use crate::wallet;
+
 const UNITS_PER_COIN: i64 = 100_000_000;
 const MAX_BATCH: i64 = 200;
 /// How far back to search the wallet when a send has to be reconciled.
@@ -26,7 +28,7 @@ const RECONCILE_LOOKBACK: u32 = 1000;
 pub async fn run(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result<()> {
     reconcile(db, rpc, coin_id).await?;
     create(db, coin_id, coin).await?;
-    send(db, rpc, coin_id).await
+    send(db, rpc, coin_id, coin).await
 }
 
 fn batch_comment(batch_id: i64) -> String {
@@ -105,7 +107,7 @@ async fn create(db: &PgPool, coin_id: i32, coin: &Coin) -> Result<()> {
     Ok(())
 }
 
-async fn send(db: &PgPool, rpc: &RpcClient, coin_id: i32) -> Result<()> {
+async fn send(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result<()> {
     let pending: Vec<(i64, String, i64)> = sqlx::query_as(
         "SELECT id, address, amount FROM payouts WHERE coin_id = $1 AND status = 'pending' ORDER BY id LIMIT $2",
     )
@@ -116,6 +118,8 @@ async fn send(db: &PgPool, rpc: &RpcClient, coin_id: i32) -> Result<()> {
     if pending.is_empty() {
         return Ok(());
     }
+    // Before anything is marked as sending: if the wallet cannot be unlocked, nothing has happened yet.
+    wallet::unlock(rpc, coin).await?;
 
     let batch_id: i64 = sqlx::query_scalar("SELECT nextval('payout_batch_id')").fetch_one(db).await?;
     let ids: Vec<i64> = pending.iter().map(|(id, ..)| *id).collect();
@@ -132,7 +136,9 @@ async fn send(db: &PgPool, rpc: &RpcClient, coin_id: i32) -> Result<()> {
 
     // The last argument lists the outputs the fee is subtracted from: all of them.
     let recipients: Vec<&String> = amounts.keys().collect();
-    match rpc.call::<String>("sendmany", json!(["", amounts, 1, batch_comment(batch_id), recipients])).await {
+    let sent = rpc.call::<String>("sendmany", json!(["", amounts, 1, batch_comment(batch_id), recipients])).await;
+    wallet::lock(rpc, coin).await;
+    match sent {
         Ok(txid) => {
             info!(batch_id, %txid, payouts = pending.len(), total = %format_amount(total), "payouts sent");
             mark_sent(db, rpc, coin_id, batch_id, &txid).await

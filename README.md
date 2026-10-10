@@ -112,6 +112,7 @@ Jeder Stratum-Server braucht eine eigene Nummer (`POOL_INSTANCE_ID`, 0 bis 255).
 | `POOL_RPC_PASSWORD_<SYMBOL>` | Stratum, Core | RPC-Passwort des Coin-Nodes |
 | `POOL_RPC_URL_<SYMBOL>` | Stratum, Core | optional, abweichende Adresse des Coin-Nodes |
 | `POOL_ADDRESS_<SYMBOL>` | Stratum | Adresse des Pool-Wallets für Block-Belohnungen |
+| `POOL_WALLET_PASSPHRASE_<SYMBOL>` | Core | verschlüsselt das Pool-Wallet und entsperrt es für Auszahlungen |
 | `ADMIN_PASSWORD` | Web | Passwort für den Admin-Bereich |
 
 ### Server per Einmal-Code anmelden
@@ -132,6 +133,12 @@ Die Web-App braucht dafür zusätzlich:
 Eine Coin lässt sich erst auswählen, wenn `pool-core` ihren Wallet-Node erreicht und eine Adresse des Pool-Wallets veröffentlicht hat. Der Wallet-Node läuft mit `POOL_WALLET=<Name>`; damit legt das Image das Wallet beim ersten Start an.
 
 Welche Coins es gibt und wie ihre Nodes gestartet werden, steht in `web/src/lib/catalog.ts`.
+
+### Pool-Wallet schützen
+
+Mit `POOL_WALLET_PASSPHRASE_<SYMBOL>` verschlüsselt `pool-core` das Wallet beim nächsten Start und entsperrt es nur für die Dauer einer Auszahlung. Das lässt sich nicht rückgängig machen: Ohne die Passphrase sind die Coins verloren, sie gehört deshalb zusätzlich an einen sicheren Ort außerhalb des Servers.
+
+Einmal täglich lässt `pool-core` den Wallet-Node eine Kopie des Wallets in dessen Datenverzeichnis schreiben (`wallet-backup-<symbol>-<Tag>.dat`, ein Monat Verlauf). Diese Kopie schützt vor einer beschädigten Wallet-Datei, nicht vor dem Verlust des Servers. Der Admin-Bereich zeigt je Coin, ob das Wallet verschlüsselt ist und wann zuletzt gesichert wurde.
 
 Die Uhren aller Server müssen per NTP synchron laufen, weil Shares und Blöcke über ihren Zeitstempel zugeordnet werden.
 
