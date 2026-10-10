@@ -236,6 +236,10 @@ export type StratumInstance = {
   /** Whether the server runs a stratum service, and the coins it runs a daemon for. */
   stratum: boolean;
   coins: string[];
+  /** Coins whose pool wallet this server holds. */
+  wallets: string[];
+  /** pool-core runs on this machine. */
+  core: boolean;
   /** Part of the pool's private network. */
   meshed: boolean;
   /** Its roles were changed and the update command has not been run there since. */
@@ -267,7 +271,7 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
   await requireAdmin();
   const [instances, nodes] = await Promise.all([
     db().query(
-      `SELECT id, region, host, stratum, coins, last_seen_at, wg_public_key IS NOT NULL AS meshed,
+      `SELECT id, region, host, stratum, coins, wallets, core, last_seen_at, wg_public_key IS NOT NULL AS meshed,
               token_hash IS NOT NULL AND applied_version IS DISTINCT FROM config_version AS update_pending,
               COALESCE(last_seen_at > now() - interval '120 seconds', FALSE) AS live,
               CASE WHEN token_hash IS NOT NULL THEN 'enrolled'
@@ -294,6 +298,8 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
       host: r.host,
       stratum: r.stratum,
       coins: r.coins,
+      wallets: r.wallets,
+      core: r.core,
       meshed: r.meshed,
       updatePending: r.update_pending,
       lastSeenAt: r.last_seen_at,

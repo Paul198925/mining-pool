@@ -6,7 +6,10 @@ mod prices;
 mod stats;
 mod wallet;
 
-use std::time::{Duration, Instant};
+use std::{
+    env,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Result, ensure};
 use pool_common::{
@@ -14,10 +17,40 @@ use pool_common::{
     rpc::RpcClient,
 };
 use sqlx::PgPool;
+use tokio::{sync::watch, task::JoinSet};
 use tracing::{error, info, warn};
 
 const BLOCK_INTERVAL: Duration = Duration::from_secs(10);
 const PRICE_INTERVAL: Duration = Duration::from_secs(300);
+const WALLET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// The servers' private network; a server's last address byte is its id (see the web app's mesh.ts).
+const MESH_NETWORK: &str = "10.77.0";
+
+/// Which enrolled server holds the pool wallet of which coin, as set in the admin area.
+async fn wallet_servers(db: &PgPool) -> Result<Vec<(String, i32)>> {
+    Ok(sqlx::query_as(
+        "SELECT wallet, id::int4 FROM stratum_instances, unnest(wallets) AS wallet
+         WHERE token_hash IS NOT NULL ORDER BY wallet, id",
+    )
+    .fetch_all(db)
+    .await?)
+}
+
+/// Points a coin at its wallet server. An address set for this deployment by hand
+/// (`POOL_RPC_URL_<SYMBOL>`) is left alone.
+fn use_wallet_server(coin: &mut Coin, server_id: i32, password: Option<&str>) {
+    if env::var(format!("POOL_RPC_URL_{}", coin.symbol)).is_ok_and(|url| !url.is_empty()) {
+        return;
+    }
+    // The configured address already names the coin's RPC port.
+    let Some(port) = coin.rpc_url.rsplit(':').next().map(|port| port.trim_end_matches('/').to_owned()) else {
+        return;
+    };
+    coin.rpc_url = format!("http://{MESH_NETWORK}.{server_id}:{port}");
+    if let Some(password) = password {
+        coin.rpc_password = password.to_owned();
+    }
+}
 /// Arbitrary but fixed: identifies "the pool-core instance" among Postgres advisory locks.
 const SINGLETON_LOCK: i64 = 0x706f_6f6c_636f_7265;
 
@@ -39,15 +72,45 @@ async fn main() -> Result<()> {
     let symbols: Vec<&str> = cfg.coins.iter().map(|coin| coin.symbol.as_str()).collect();
     sqlx::query("UPDATE coins SET enabled = FALSE WHERE NOT (symbol = ANY($1))").bind(&symbols).execute(&db).await?;
 
+    let wallets = wallet_servers(&db).await?;
+    let wallet_password: Option<String> =
+        sqlx::query_scalar("SELECT value FROM pool_secrets WHERE name = 'wallet_rpc_password'").fetch_optional(&db).await?;
+    let (stop, stopping) = watch::channel(false);
+    let mut coins = JoinSet::new();
     for coin in &cfg.coins {
         let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
-        tokio::spawn(run_coin(db.clone(), coin_id, coin.clone(), cfg.accounting.clone()));
+        let mut coin = coin.clone();
+        if let Some((_, server_id)) = wallets.iter().find(|(symbol, _)| *symbol == coin.symbol) {
+            use_wallet_server(&mut coin, *server_id, wallet_password.as_deref());
+            info!(coin = %coin.symbol, server = server_id, "pool wallet is on an enrolled server");
+        }
+        coins.spawn(run_coin(db.clone(), coin_id, coin, cfg.accounting.clone(), stopping.clone()));
     }
 
     tokio::spawn(run_exchange(db.clone(), cfg.coins.clone()));
 
-    tokio::signal::ctrl_c().await?;
-    info!("shutting down");
+    // Where the wallets are is fixed at startup. When an admin moves one, finish the
+    // round in progress and leave; the supervisor starts us again with the new layout.
+    let moved = async {
+        let mut tick = tokio::time::interval(WALLET_CHECK_INTERVAL);
+        loop {
+            tick.tick().await;
+            if wallet_servers(&db).await.is_ok_and(|now| now != wallets) {
+                return;
+            }
+        }
+    };
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            result?;
+            info!("shutting down");
+        }
+        _ = moved => {
+            info!("a pool wallet was moved to another server, restarting to use it");
+            stop.send_replace(true);
+            while coins.join_next().await.is_some() {}
+        }
+    }
     Ok(())
 }
 
@@ -73,7 +136,7 @@ async fn run_exchange(db: PgPool, coins: Vec<Coin>) {
 }
 
 /// All accounting for one coin runs in this single loop, so its steps never overlap.
-async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) {
+async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting, stopping: watch::Receiver<bool>) {
     let rpc = match RpcClient::new(&coin) {
         Ok(rpc) => rpc,
         Err(err) => return error!(coin = %coin.symbol, "cannot create rpc client: {err:#}"),
@@ -89,6 +152,10 @@ async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) 
 
     loop {
         tick.tick().await;
+        // Only between rounds, so that a payout is never cut off halfway.
+        if *stopping.borrow() {
+            return;
+        }
         if let Err(err) = stats::refresh_chain_stats(&db, &rpc, coin_id, &coin).await {
             warn!(coin = %coin.symbol, "refreshing chain stats failed: {err:#}");
         }

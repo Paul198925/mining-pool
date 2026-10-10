@@ -10,8 +10,8 @@ import { formatAge, formatHashrate } from "@/lib/format";
 import { meshEnabled, WG_PORT } from "@/lib/mesh";
 import { publicUrl } from "@/lib/public-url";
 
-import { removeServer, updateServer } from "./actions";
-import { AddServerForm, CopyCommand, RoleChoices } from "./add-server-form";
+import { removeServer } from "./actions";
+import { AddServerForm, CopyCommand, EditServerForm } from "./add-server-form";
 
 export const metadata: Metadata = { title: "Servers" };
 
@@ -49,7 +49,12 @@ const ENROLLMENT_NOTE = {
 };
 
 function runs(instance: StratumInstance): string {
-  const parts = [...(instance.stratum ? ["Stratum"] : []), ...instance.coins.map((symbol) => `${symbol} node`)];
+  const parts = [
+    ...(instance.core ? ["Pool host"] : []),
+    ...(instance.stratum ? ["Stratum"] : []),
+    ...instance.wallets.map((symbol) => `${symbol} wallet`),
+    ...instance.coins.map((symbol) => `${symbol} node`),
+  ];
   return parts.join(", ") || "nothing";
 }
 
@@ -66,6 +71,13 @@ async function Servers() {
           <li>
             A server runs the stratum service, coin nodes, or both. One stratum service accepts miners for every
             algorithm and uses the coin nodes of all servers, so a coin needs a node on only one of them.
+          </li>
+          <li>
+            Every coin needs exactly one <b>node with pool wallet</b>: block rewards go there and payouts are sent
+            from it. The wallet&apos;s keys are on that server, so choose one you trust; it is encrypted and
+            pool-core backs it up on the same server every day. Wallet nodes take commands only from the{" "}
+            <b>pool host</b>: add the machine pool-core runs on as a server with just that role, so that it joins
+            the private network.
           </li>
           <li>
             It needs Docker-capable Linux and enough disk for the chosen chains.
@@ -103,15 +115,16 @@ async function Servers() {
                     ) : (
                       <details>
                         <summary>{runs(instance)}</summary>
-                        <form action={updateServer} className="grid gap-2 p-1">
-                          <input type="hidden" name="id" value={instance.id} />
-                          <RoleChoices coins={choices} stratum={instance.stratum} chosen={instance.coins} />
-                          <div>
-                            <button type="submit" className="button">
-                              Save
-                            </button>
-                          </div>
-                        </form>
+                        <EditServerForm
+                          id={instance.id}
+                          coins={choices}
+                          roles={{
+                            stratum: instance.stratum,
+                            coins: instance.coins,
+                            wallets: instance.wallets,
+                            core: instance.core,
+                          }}
+                        />
                       </details>
                     )}
                   </td>
