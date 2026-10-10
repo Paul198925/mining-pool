@@ -35,9 +35,13 @@ function State({ ok, yes, no }: { ok: boolean; yes: string; no: string }) {
 function syncState(node: NodeStatus): string {
   if (!node.reachable || node.syncProgress === null) return "–";
   if (node.peers === 0) return "no peers";
-  if (node.syncProgress > 0.9999) return "yes";
   // While only headers are loaded the block height stays at zero.
   if (node.height === 0 && (node.headers ?? 0) > 0) return "loading headers";
+  // Some daemons report their progress as complete long before they are: trust the
+  // blocks they still have to fetch for the headers they know.
+  const behind = (node.headers ?? 0) - (node.height ?? 0);
+  if (behind > 2) return `${(((node.height ?? 0) / (node.headers ?? 1)) * 100).toFixed(1)}%`;
+  if (node.syncProgress > 0.9999) return "yes";
   return `${(node.syncProgress * 100).toFixed(1)}%`;
 }
 
