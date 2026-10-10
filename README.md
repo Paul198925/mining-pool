@@ -23,7 +23,7 @@ Voraussetzungen: Docker, Rust, Node.js.
 docker compose up -d --build --wait
 ```
 
-Startet PostgreSQL (Port 55432), Redis (56379), zwei Dogecoin-Nodes (RPC auf 18332) und einen Xaya-Node (RPC auf 18493), alle im Regtest-Modus. Alles ist nur an 127.0.0.1 gebunden.
+Startet PostgreSQL (Port 55432), Redis (56379), zwei Dogecoin-Nodes (RPC auf 18332) sowie je einen Xaya- und SpaceXpanse-Node (RPC auf 18493 und 18499), alle im Regtest-Modus. Alles ist nur an 127.0.0.1 gebunden.
 
 Auf einer frischen Regtest-Chain einmalig Blöcke erzeugen, sonst liefert der Node keine Block-Templates:
 
@@ -64,6 +64,8 @@ docker compose exec xaya xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpass
 ```bash
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner-xaya
 ```
+
+SpaceXpanse (Port 3335) nutzt denselben Miner mit `MINER_PORT=3335` und einer Adresse vom `spacexpanse`-Node (`spacexpanse-cli`, RPC-Port 18499).
 
 Solo- und Party-Mining wählt der Miner über das Passwort: `MINER_PASSWORD=m=solo` oder `MINER_PASSWORD=m=party.<Name>` vor denselben Befehl setzen.
 

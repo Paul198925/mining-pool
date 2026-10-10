@@ -90,6 +90,34 @@ services:
       timeout: 5s
       retries: 20
 
+  # SpaceXpanse regtest. Its default RPC port equals its P2P port, so the RPC port is set explicitly.
+  spacexpanse:
+    build: docker/spacexpanse
+    platform: linux/amd64
+    command:
+      - -regtest
+      - -listen=0
+      - -fallbackfee=0.001
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcport=18499
+      - -rpcuser=pool
+      - -rpcpassword=pooldev
+    ports:
+      - "127.0.0.1:18499:18499"
+    volumes:
+      - spacexpanse:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          spacexpanse-cli -regtest -rpcport=18499 -rpcuser=pool -rpcpassword=pooldev getwalletinfo
+          || spacexpanse-cli -regtest -rpcport=18499 -rpcuser=pool -rpcpassword=pooldev
+          -named createwallet wallet_name=pool load_on_startup=true
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # Test miners, started on demand, e.g.: docker compose --profile miner run --rm miner
   miner:
     build: docker/cpuminer
@@ -99,9 +127,10 @@ services:
   miner-xaya:
     build: docker/cpuminer-xaya
     profiles: [miner]
-    command: ["-a", "neoscrypt", "-o", "stratum+tcp://host.docker.internal:3334", "-u", "${MINER_ADDRESS:-unset}.rig1", "-p", "${MINER_PASSWORD:-x}", "-t", "1"]
+    command: ["-a", "neoscrypt", "-o", "stratum+tcp://host.docker.internal:${MINER_PORT:-3334}", "-u", "${MINER_ADDRESS:-unset}.rig1", "-p", "${MINER_PASSWORD:-x}", "-t", "1"]
 
 volumes:
   pgdata:
   dogecoin:
   xaya:
+  spacexpanse:
