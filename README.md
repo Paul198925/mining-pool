@@ -48,14 +48,19 @@ npm --prefix web run dev
 Test-Miner (cpuminer) gegen den laufenden Stratum-Server starten, beenden mit Strg+C. Der Benutzername ist die Auszahlungsadresse, also zuerst eine Regtest-Adresse holen:
 
 ```bash
-docker compose exec dogecoin dogecoin-cli -regtest -rpcport=18332 -rpcuser=pool -rpcpassword=pooldev getnewaddress
+docker compose exec litecoin litecoin-cli -regtest -rpcport=19443 -rpcuser=pool -rpcpassword=pooldev getnewaddress "" legacy
 ```
 
 ```bash
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner
 ```
 
+Der Scrypt-Miner arbeitet an Litecoin und mint Dogecoin mit. Mit `MINER_PASSWORD=doge=<Dogecoin-Adresse>` davor gehen die Dogecoin an eine eigene Adresse (`dogecoin-cli ... getnewaddress`, RPC-Port 18332).
+
 Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334, RinHash 3335, KawPoW 3336). Laufen mehrere Coins auf einem Port, erkennt der Server die Coin an der Adresse; mit `c=<SYMBOL>` im Passwort legt der Miner sie selbst fest.
+
+**Merged Mining:** Auf dem Scrypt-Port arbeiten Miner an Litecoin; Dogecoin wird dabei mitgemint, ohne dass der Miner etwas davon merkt. Jeder Share wird auch als Dogecoin-Block geprüft und bei Erfolg dort eingereicht. Damit die Dogecoin ausgezahlt werden können, nennt der Miner seine Dogecoin-Adresse im Passwort: `-u <LTC-Adresse>.rig1 -p c=LTC,doge=<DOGE-Adresse>`. Ohne diese Angabe werden die Dogecoin dem Litecoin-Konto gutgeschrieben und bleiben dort als Guthaben stehen, denn an eine Litecoin-Adresse lassen sich keine Dogecoin senden. Direkt, also mit einer Dogecoin-Adresse als Benutzername, lässt sich Dogecoin nicht mehr minen. Welche Coin mit welcher mitgemint wird, steht als `aux_of` in der Konfiguration und als `auxOf` in `web/src/lib/catalog.ts`.
+
 
 Für SpaceXpanse gibt es einen eigenen Test-Miner; die Adresse kommt vom SpaceXpanse-Node:
 
@@ -141,7 +146,7 @@ Die Web-App braucht dafür zusätzlich:
 | Variable | Inhalt |
 |---|---|
 | `POOL_PUBLIC_URL` | Adresse, unter der die Server den Pool erreichen, z. B. `https://pool.example` |
-| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse`, `...-rincoin`, `...-ravencoin` |
+| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse`, `...-rincoin`, `...-ravencoin`, `...-litecoin` |
 | `POOL_ADDRESS_<SYMBOL>` | optional: überschreibt die Adresse, die `pool-core` aus dem Pool-Wallet veröffentlicht |
 | `POOL_NETWORK` | `regtest` nur für Tests, sonst weglassen |
 | `POOL_WIREGUARD` | `off` nur für Tests auf einem einzigen Docker-Host; dann sieht ein Stratum-Dienst nur die Nodes seines eigenen Servers |

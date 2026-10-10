@@ -25,6 +25,8 @@ export type CoinSpec = {
   rpcPort: Record<Network, number>;
   /** Rule sets the node wants named in block-template requests. */
   templateRules?: string[];
+  /** Symbol of the coin this one is merge-mined with; it cannot be mined on its own then. */
+  auxOf?: string;
   /** Extra daemon arguments a network needs. */
   nodeArgs?: Partial<Record<Network, string[]>>;
   blockMaturity: number;
@@ -34,10 +36,24 @@ export type CoinSpec = {
 
 export const COINS: CoinSpec[] = [
   {
+    symbol: "LTC",
+    name: "Litecoin",
+    algo: "scrypt",
+    chain: "bitcoin",
+    service: "litecoin",
+    rpcPort: { main: 9332, regtest: 19443 },
+    templateRules: ["mweb", "segwit"],
+    // MWEB needs a peg-in by hand before it can activate on regtest.
+    nodeArgs: { regtest: ["-vbparams=mweb:-2:0"] },
+    blockMaturity: 100,
+    minPayout: 0.01,
+  },
+  {
     symbol: "DOGE",
     name: "Dogecoin",
     algo: "scrypt",
     chain: "bitcoin",
+    auxOf: "LTC",
     service: "dogecoin",
     rpcPort: { main: 22555, regtest: 18332 },
     blockMaturity: 240,
@@ -80,4 +96,18 @@ export const COINS: CoinSpec[] = [
 
 export function coinSpec(symbol: string): CoinSpec | undefined {
   return COINS.find((coin) => coin.symbol === symbol);
+}
+
+/**
+ * What miners can connect for: coins with a stratum port that are not merge-mined with
+ * another one. A coin that has one riding along names it as `merged`.
+ */
+export function mineableCoins(
+  coins: { symbol: string; name: string; algo: string; stratumPort: number | null }[],
+): { symbol: string; name: string; algo: string; port: number; merged?: string }[] {
+  return coins.flatMap((coin) => {
+    if (coin.stratumPort === null || coinSpec(coin.symbol)?.auxOf) return [];
+    const merged = COINS.find((other) => other.auxOf === coin.symbol && coins.some((c) => c.symbol === other.symbol));
+    return [{ symbol: coin.symbol, name: coin.name, algo: coin.algo, port: coin.stratumPort, merged: merged?.symbol }];
+  });
 }

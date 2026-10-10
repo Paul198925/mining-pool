@@ -54,9 +54,21 @@ solo_fee_percent = 1.0
 payout_interval_secs = 3600
 
 [[coins]]
+symbol = "LTC"
+name = "Litecoin"
+algo = "scrypt"
+template_rules = ["mweb", "segwit"]
+rpc_url = "http://litecoin:9332"
+rpc_user = "pool"
+block_maturity = 100
+min_payout = 0.01
+
+# Merge-mined: scrypt miners work on Litecoin, and every share is also tried on Dogecoin.
+[[coins]]
 symbol = "DOGE"
 name = "Dogecoin"
 algo = "scrypt"
+aux_of = "LTC"
 rpc_url = "http://dogecoin:22555"
 rpc_user = "pool"
 block_maturity = 240

@@ -10,6 +10,7 @@ import { HashrateChart } from "@/components/hashrate-chart";
 import { StratumGenerator } from "@/components/stratum-generator";
 import { Box, Empty, Skeleton } from "@/components/ui";
 import { formatHashrate } from "@/lib/format";
+import { mineableCoins } from "@/lib/catalog";
 import { type Coin, getBlocks, getCoins, getPoolHistory, getStratumServers } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Algorithm" };
@@ -32,11 +33,7 @@ async function Algo({ params }: Pick<PageProps<"/algo/[algo]">, "params">) {
     notFound();
   }
   const [servers, blocks] = await Promise.all([getStratumServers(), getBlocks(50, algo)]);
-  const mineable = coins.flatMap((coin) =>
-    coin.stratumPort === null
-      ? []
-      : [{ symbol: coin.symbol, name: coin.name, algo: coin.algo, port: coin.stratumPort }],
-  );
+  const mineable = mineableCoins(coins);
   const hashrate = coins.reduce((sum, coin) => sum + coin.hashrate, 0);
   const miners = coins.reduce((sum, coin) => sum + coin.miners, 0);
 

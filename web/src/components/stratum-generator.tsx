@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 
-export type StratumCoin = { symbol: string; name: string; algo: string; port: number };
+/** `merged`: symbol of a coin that is mined along; miners name their address for it in the password. */
+export type StratumCoin = { symbol: string; name: string; algo: string; port: number; merged?: string };
 export type StratumServer = { region: string; host: string };
 
 type Mode = "pool" | "solo" | "party";
@@ -16,6 +17,7 @@ export function StratumGenerator({ coins, servers }: { coins: StratumCoin[]; ser
   const [mode, setMode] = useState<Mode>("pool");
   const [party, setParty] = useState("");
   const [address, setAddress] = useState("");
+  const [mergedAddress, setMergedAddress] = useState("");
   const [worker, setWorker] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -29,6 +31,8 @@ export function StratumGenerator({ coins, servers }: { coins: StratumCoin[]; ser
 
   const user = (address.trim() || `<${coin.symbol}_ADDRESS>`) + (worker.trim() ? `.${worker.trim()}` : "");
   const options = [`c=${coin.symbol}`];
+  const merged = coin.merged;
+  if (merged && mergedAddress.trim()) options.push(`${merged.toLowerCase()}=${mergedAddress.trim()}`);
   if (mode === "solo") options.push("m=solo");
   if (mode === "party") options.push(`m=party.${party.trim() || "<NAME>"}`);
   const command = `-a ${coin.algo} -o stratum+tcp://${server.host}:${coin.port} -u ${user} -p ${options.join(",")}`;
@@ -105,6 +109,20 @@ export function StratumGenerator({ coins, servers }: { coins: StratumCoin[]; ser
           spellCheck={false}
           onChange={(event) => edit(setAddress)(event.target.value.replace(/[^A-Za-z0-9]/g, ""))}
         />
+
+        {merged && (
+          <>
+            <label htmlFor="gen-merged-address">{merged} wallet</label>
+            <input
+              id="gen-merged-address"
+              className="text-input"
+              value={mergedAddress}
+              placeholder={`Your ${merged} address: ${merged} is mined along with ${coin.symbol}`}
+              spellCheck={false}
+              onChange={(event) => edit(setMergedAddress)(event.target.value.replace(/[^A-Za-z0-9]/g, ""))}
+            />
+          </>
+        )}
 
         <label htmlFor="gen-worker">Worker</label>
         <input

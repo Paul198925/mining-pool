@@ -141,12 +141,14 @@ async function servedCoins(server: Server): Promise<{ coin: CoinSpec; url: strin
     db().query("SELECT symbol, enabled FROM coins"),
   ]);
   const switchedOff = new Set(switches.rows.filter((r) => !r.enabled).map((r) => r.symbol));
-  return COINS.flatMap((coin) => {
+  const usable = COINS.flatMap((coin) => {
     const url = rpcUrl(server, coin, servers);
     const address = addresses[coin.symbol];
     // A coin needs a daemon to mine on and a pool wallet to be paid into, and an admin can switch it off.
     return url && address && !switchedOff.has(coin.symbol) ? [{ coin, url, address }] : [];
   });
+  // A merge-mined coin has no work of its own: without its parent it cannot be mined.
+  return usable.filter(({ coin }) => !coin.auxOf || usable.some((other) => other.coin.symbol === coin.auxOf));
 }
 
 /** The pool's configuration for one server, in the shape the stratum service reads. */
@@ -174,6 +176,7 @@ export async function nodeConfig(server: Server) {
       algo: coin.algo,
       chain: coin.chain,
       template_rules: coin.templateRules ?? [],
+      aux_of: coin.auxOf ?? null,
       rpc_url: url,
       rpc_user: "pool",
       rpc_password: rpcPassword,

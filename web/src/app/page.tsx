@@ -7,6 +7,7 @@ import { WalletSearch } from "@/components/miner-search";
 import { StratumGenerator } from "@/components/stratum-generator";
 import { Box, Empty, Skeleton } from "@/components/ui";
 import { formatHashrate } from "@/lib/format";
+import { mineableCoins } from "@/lib/catalog";
 import { getBlocks, getCoins, getStratumServers } from "@/lib/queries";
 
 export default function Home() {
@@ -46,11 +47,7 @@ export default function Home() {
 
 async function StratumServers() {
   const [coins, servers] = await Promise.all([getCoins(), getStratumServers()]);
-  const mineable = coins.flatMap((coin) =>
-    coin.stratumPort === null
-      ? []
-      : [{ symbol: coin.symbol, name: coin.name, algo: coin.algo, port: coin.stratumPort }],
-  );
+  const mineable = mineableCoins(coins);
   return (
     <Box title="STRATUM SERVERS">
       <ul>

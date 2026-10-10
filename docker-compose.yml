@@ -107,6 +107,33 @@ services:
       timeout: 5s
       retries: 20
 
+  # Litecoin is what scrypt miners work on; Dogecoin is merge-mined along with it.
+  # MWEB is switched off here: on regtest it needs a peg-in by hand before it activates.
+  litecoin:
+    build: docker/litecoin
+    platform: linux/amd64
+    environment:
+      POOL_WALLET: pool
+    command:
+      - -regtest
+      - -listen=0
+      - -fallbackfee=0.001
+      - -vbparams=mweb:-2:0
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcport=19443
+      - -rpcuser=pool
+      - -rpcpassword=pooldev
+    ports:
+      - "127.0.0.1:19443:19443"
+    volumes:
+      - litecoin:/data
+    healthcheck:
+      test: ["CMD", "litecoin-cli", "-regtest", "-rpcport=19443", "-rpcuser=pool", "-rpcpassword=pooldev", "getblockcount"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # KawPoW only starts in the year 2083 on Ravencoin's regtest chain, so this node's
   # clock is set there. -bypassdownload: hand out work without peers.
   ravencoin:
@@ -154,3 +181,4 @@ volumes:
   spacexpanse:
   rincoin:
   ravencoin:
+  litecoin:

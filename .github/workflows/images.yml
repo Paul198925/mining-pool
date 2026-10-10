@@ -52,6 +52,9 @@ jobs:
           - name: dogecoin
             context: docker/dogecoin
             file: docker/dogecoin/Dockerfile
+          - name: litecoin
+            context: docker/litecoin
+            file: docker/litecoin/Dockerfile
           - name: ravencoin
             context: docker/ravencoin
             file: docker/ravencoin/Dockerfile
