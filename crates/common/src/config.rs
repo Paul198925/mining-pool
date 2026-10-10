@@ -96,6 +96,14 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Builds the configuration from what the pool's node API sends an enrolled server.
+    /// The server's own secrets (daemon passwords) still come from its environment.
+    pub fn from_json(value: serde_json::Value) -> Result<Self> {
+        let mut cfg: Self = serde_json::from_value(value)?;
+        cfg.apply_env(|name| env::var(name).ok().filter(|value| !value.is_empty()))?;
+        Ok(cfg)
+    }
+
     /// Lets a deployment keep secrets and per-server settings out of the config file:
     ///
     /// - `DATABASE_URL`

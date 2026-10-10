@@ -1,10 +1,13 @@
 use anyhow::Result;
 use pool_common::rpc::RpcClient;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use crate::backend::Backend;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct WorkerIds {
     pub account_id: i64,
     pub worker_id: i64,
@@ -24,6 +27,7 @@ enum Mode {
 
 /// A coin served on the port the miner connected to.
 pub struct Candidate<'a> {
+    /// The coin's database id; unused on servers that go through the node API.
     pub coin_id: i32,
     pub symbol: &'a str,
     pub rpc: &'a RpcClient,
@@ -36,7 +40,7 @@ pub struct Candidate<'a> {
 /// Without `c=`, the coin is the first one on the port for which the address is valid.
 /// Returns the index of the chosen candidate, or `None` if no coin accepts the login.
 pub async fn resolve(
-    db: &PgPool,
+    backend: &Backend,
     candidates: &[Candidate<'_>],
     user: &str,
     password: &str,
@@ -63,6 +67,35 @@ pub async fn resolve(
         return Ok(None);
     };
 
+    let mode = mode(password);
+    // Only a hash of the party name is kept, and only the hash ever leaves this server.
+    let party_key = match &mode {
+        Mode::Party(name) => Some(hex::encode(Sha256::digest(name.as_bytes()))),
+        _ => None,
+    };
+    let solo = mode == Mode::Solo;
+    let ids = match backend {
+        Backend::Direct(db) => register(db, coin_id, address, worker, solo, party_key.as_deref()).await?,
+        Backend::Api(api) => {
+            let login = json!({
+                "symbol": candidates[index].symbol, "address": address, "worker": worker,
+                "solo": solo, "party_key_hash": party_key,
+            });
+            api.post("/api/node/authorize", &login).await?
+        }
+    };
+    Ok(Some((index, ids)))
+}
+
+/// Maps a login to the pool's account, worker and party ids, creating them on first sight.
+async fn register(
+    db: &PgPool,
+    coin_id: i32,
+    address: &str,
+    worker: &str,
+    solo: bool,
+    party_key: Option<&str>,
+) -> Result<WorkerIds> {
     let account_id: i64 = sqlx::query_scalar(
         "INSERT INTO accounts (payout_coin_id, payout_address) VALUES ($1, $2)
          ON CONFLICT (payout_coin_id, payout_address) DO UPDATE SET payout_address = EXCLUDED.payout_address
@@ -81,23 +114,22 @@ pub async fn resolve(
     .bind(worker)
     .fetch_one(db)
     .await?;
-    let mode = mode(password);
-    let party_id = match &mode {
-        Mode::Party(name) => {
+    let party_id = match party_key {
+        Some(key_hash) => {
             let id: i64 = sqlx::query_scalar(
                 "INSERT INTO parties (coin_id, key_hash) VALUES ($1, $2)
                  ON CONFLICT (coin_id, key_hash) DO UPDATE SET key_hash = EXCLUDED.key_hash
                  RETURNING id",
             )
             .bind(coin_id)
-            .bind(hex::encode(Sha256::digest(name.as_bytes())))
+            .bind(key_hash)
             .fetch_one(db)
             .await?;
             Some(id)
         }
-        _ => None,
+        None => None,
     };
-    Ok(Some((index, WorkerIds { account_id, worker_id, solo: mode == Mode::Solo, party_id })))
+    Ok(WorkerIds { account_id, worker_id, solo, party_id })
 }
 
 /// The symbol from a `c=<SYMBOL>` password option.

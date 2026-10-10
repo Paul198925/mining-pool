@@ -223,7 +223,16 @@ export async function getAdminMiners(limit: number): Promise<AdminMiner[]> {
   }));
 }
 
-export type StratumInstance = { id: number; region: string; host: string; lastSeenAt: Date; live: boolean };
+export type StratumInstance = {
+  id: number;
+  region: string;
+  host: string;
+  coins: string[];
+  lastSeenAt: Date | null;
+  live: boolean;
+  /** "waiting": added, install command not run yet. "expired": its one-time code ran out unused. */
+  enrollment: "enrolled" | "waiting" | "expired" | "manual";
+};
 
 export type NodeStatus = {
   symbol: string;
@@ -241,7 +250,12 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
   await requireAdmin();
   const [instances, nodes] = await Promise.all([
     db().query(
-      `SELECT id, region, host, last_seen_at, last_seen_at > now() - interval '120 seconds' AS live
+      `SELECT id, region, host, coins, last_seen_at,
+              COALESCE(last_seen_at > now() - interval '120 seconds', FALSE) AS live,
+              CASE WHEN token_hash IS NOT NULL THEN 'enrolled'
+                   WHEN enroll_code_hash IS NULL THEN 'manual'
+                   WHEN enroll_expires_at > now() THEN 'waiting'
+                   ELSE 'expired' END AS enrollment
        FROM stratum_instances ORDER BY id`,
     ),
     db().query(
@@ -260,8 +274,10 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
       id: r.id,
       region: r.region,
       host: r.host,
+      coins: r.coins,
       lastSeenAt: r.last_seen_at,
       live: r.live,
+      enrollment: r.enrollment,
     })),
     nodes: nodes.rows.map((r) => ({
       symbol: r.symbol,

@@ -1,5 +1,6 @@
 mod accounts;
 mod algo;
+mod backend;
 mod chain;
 mod instance;
 mod job;
@@ -23,7 +24,6 @@ use pool_common::{
     rpc::RpcClient,
 };
 use serde_json::{Value, json};
-use sqlx::PgPool;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::watch,
@@ -34,10 +34,11 @@ use tracing::{debug, error, info, warn};
 use crate::{
     accounts::{Candidate, WorkerIds},
     algo::Algo,
+    backend::{ApiClient, Backend},
     chain::Chain,
     job::{FoundBlock, Job},
     pool::{Pool, Port},
-    recorder::{BlockEvent, Recorder, ShareEvent},
+    recorder::{BlockEvent, Recorder, ShareEvent, Sink},
     session::{AcceptedShare, Login, Session},
     vardiff::VarDiffConfig,
 };
@@ -63,24 +64,35 @@ struct CoinCtx {
 #[derive(Clone)]
 struct Server {
     port: Arc<Port>,
-    db: PgPool,
+    backend: Backend,
     coins: Arc<Vec<CoinCtx>>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     pool_common::init_logging();
-    let cfg = Config::load()?;
-    ensure!(!cfg.stratum.is_empty(), "no [[stratum]] listener configured");
-    let db = pool_common::db::connect(&cfg).await?;
-    instance::register(&db, &cfg.instance).await?;
-    info!(id = cfg.instance.id, region = %cfg.instance.region, host = %cfg.instance.host, "stratum instance registered");
+    // An enrolled server gets its settings from the pool; otherwise there is a config file and a database.
+    let (cfg, backend) = match ApiClient::from_env()? {
+        Some(api) => {
+            let cfg = api.config().await.context("asking the pool for this server's configuration")?;
+            api.spawn_heartbeat();
+            (cfg, Backend::Api(api))
+        }
+        None => {
+            let cfg = Config::load()?;
+            let db = pool_common::db::connect(&cfg).await?;
+            instance::register(&db, &cfg.instance).await?;
+            (cfg, Backend::Direct(db))
+        }
+    };
+    ensure!(!cfg.stratum.is_empty(), "no stratum port is configured for this server");
+    info!(id = cfg.instance.id, region = %cfg.instance.region, host = %cfg.instance.host, "stratum instance started");
 
     let mut recorders = Vec::new();
     for listener in &cfg.stratum {
         let coins: Vec<&Coin> = cfg.coins.iter().filter(|coin| coin.algo == listener.algo).collect();
         ensure!(!coins.is_empty(), "no coin under [[coins]] uses algo {}", listener.algo);
-        let started = start_listener(listener, &coins, cfg.instance.id, db.clone())
+        let started = start_listener(listener, &coins, cfg.instance.id, backend.clone())
             .await
             .with_context(|| format!("starting stratum for {}", listener.algo))?;
         recorders.extend(started);
@@ -94,12 +106,19 @@ async fn main() -> Result<()> {
     for recorder in recorders {
         recorder.flush().await;
     }
-    instance::unregister(&db, &cfg.instance).await;
+    if let Backend::Direct(db) = &backend {
+        instance::unregister(db, &cfg.instance).await;
+    }
     Ok(())
 }
 
 /// Sets up every coin of one algorithm and starts accepting miners on the algorithm's port.
-async fn start_listener(settings: &Stratum, coins: &[&Coin], instance_id: u8, db: PgPool) -> Result<Vec<Recorder>> {
+async fn start_listener(
+    settings: &Stratum,
+    coins: &[&Coin],
+    instance_id: u8,
+    backend: Backend,
+) -> Result<Vec<Recorder>> {
     // The extranonce layout is announced at subscribe, before the miner names a coin.
     let chain = Chain::from_name(&coins[0].chain)?;
     ensure!(
@@ -121,24 +140,31 @@ async fn start_listener(settings: &Stratum, coins: &[&Coin], instance_id: u8, db
 
     let mut contexts = Vec::new();
     for coin in coins {
-        let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
-        // Published so the website can tell miners where to connect.
-        sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1")
-            .bind(coin_id)
-            .bind(port_number)
-            .execute(&db)
-            .await?;
+        let (coin_id, sink) = match &backend {
+            Backend::Direct(db) => {
+                let coin_id = pool_common::db::ensure_coin(db, coin).await?;
+                // Published so the website can tell miners where to connect.
+                sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1")
+                    .bind(coin_id)
+                    .bind(port_number)
+                    .execute(db)
+                    .await?;
+                (coin_id, Sink::Direct { db: db.clone(), coin_id })
+            }
+            // The pool registered the coin when it handed out this server's configuration.
+            Backend::Api(api) => (0, Sink::Api { api: api.clone(), symbol: coin.symbol.clone() }),
+        };
         let rpc = RpcClient::new(coin)?;
         let payout_script = payout_script(&rpc, coin).await.with_context(|| format!("coin {}", coin.symbol))?;
         let pool = Arc::new(Pool::default());
         let (job_tx, jobs) = watch::channel(None);
         tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, instance_id, payout_script, job_tx));
-        let recorder = Recorder::spawn(db.clone(), coin_id);
+        let recorder = Recorder::spawn(sink);
         contexts.push(CoinCtx { symbol: coin.symbol.clone(), coin_id, rpc, pool, recorder, jobs });
     }
     let recorders = contexts.iter().map(|coin| coin.recorder.clone()).collect();
     let symbols: Vec<&str> = coins.iter().map(|coin| coin.symbol.as_str()).collect();
-    let ctx = Server { port, db, coins: Arc::new(contexts) };
+    let ctx = Server { port, backend, coins: Arc::new(contexts) };
 
     let listener = TcpListener::bind(&settings.listen).await.with_context(|| format!("binding {}", settings.listen))?;
     info!(listen = %settings.listen, algo = %settings.algo, coins = %symbols.join(","), "stratum listening");
@@ -254,14 +280,14 @@ async fn login(
     let candidates: Vec<Candidate> = ctx
         .coins
         .iter()
-        .filter(|coin| current.as_ref().is_none_or(|current| current.coin_id == coin.coin_id))
+        .filter(|coin| current.as_ref().is_none_or(|current| current.symbol == coin.symbol))
         .map(|coin| Candidate { coin_id: coin.coin_id, symbol: &coin.symbol, rpc: &coin.rpc })
         .collect();
-    let Some((index, worker)) = accounts::resolve(&ctx.db, &candidates, user, password).await? else {
+    let Some((index, worker)) = accounts::resolve(&ctx.backend, &candidates, user, password).await? else {
         return Ok(None);
     };
-    let coin_id = candidates[index].coin_id;
-    Ok(ctx.coins.iter().find(|coin| coin.coin_id == coin_id).map(|coin| (coin.clone(), worker)))
+    let symbol = candidates[index].symbol;
+    Ok(ctx.coins.iter().find(|coin| coin.symbol == symbol).map(|coin| (coin.clone(), worker)))
 }
 
 fn record_share(coin: &CoinCtx, share: AcceptedShare) {

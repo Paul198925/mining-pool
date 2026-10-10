@@ -114,6 +114,23 @@ Jeder Stratum-Server braucht eine eigene Nummer (`POOL_INSTANCE_ID`, 0 bis 255).
 | `POOL_ADDRESS_<SYMBOL>` | Stratum | Adresse des Pool-Wallets für Block-Belohnungen |
 | `ADMIN_PASSWORD` | Web | Passwort für den Admin-Bereich |
 
+### Server per Einmal-Code anmelden
+
+Weitere Stratum-Server samt Coin-Nodes müssen nicht von Hand eingerichtet werden. Unter `/admin/servers` legt man einen Server an (Region, Hostname, Coins) und bekommt eine Befehlszeile mit einem Einmal-Code, die man auf dem neuen Server als root ausführt. Sie installiert Docker, meldet den Server beim Pool an und startet den Stratum-Dienst und die gewählten Coin-Nodes.
+
+Ein so angemeldeter Server hat keinen Datenbankzugang. Er liefert Logins, Shares und Blöcke über die Schnittstelle `/api/node/*` der Website ab und weist sich mit einem eigenen Schlüssel aus, den nur er kennt. Die Coin-Nodes laufen dort ohne Wallet, und ihr RPC-Passwort wird auf dem Server erzeugt und verlässt ihn nicht. „Remove" im Admin-Bereich sperrt den Schlüssel sofort.
+
+Die Web-App braucht dafür zusätzlich:
+
+| Variable | Inhalt |
+|---|---|
+| `POOL_PUBLIC_URL` | Adresse, unter der die Server den Pool erreichen, z. B. `https://pool.example` |
+| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-xaya`, `...-spacexpanse` |
+| `POOL_ADDRESS_<SYMBOL>` | Adresse des Pool-Wallets je Coin; ohne sie lässt sich die Coin nicht auswählen |
+| `POOL_NETWORK` | `regtest` nur für Tests, sonst weglassen |
+
+Welche Coins es gibt und wie ihre Nodes gestartet werden, steht in `web/src/lib/catalog.ts`.
+
 Die Uhren aller Server müssen per NTP synchron laufen, weil Shares und Blöcke über ihren Zeitstempel zugeordnet werden.
 
 Tests:

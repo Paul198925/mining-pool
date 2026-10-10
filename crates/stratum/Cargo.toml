@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 pool-common.workspace = true
+reqwest.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 hex.workspace = true
