@@ -138,9 +138,12 @@ async function servedCoins(server: Server): Promise<{ coin: CoinSpec; url: strin
   const [servers, addresses, switches] = await Promise.all([
     enrolledServers(),
     poolAddresses(),
-    db().query("SELECT symbol, enabled FROM coins"),
+    // `wallet_seen`: pool-core has talked to the coin's wallet within the last hour.
+    db().query("SELECT symbol, enabled, COALESCE(stats_at > now() - interval '1 hour', FALSE) AS wallet_seen FROM coins"),
   ]);
-  const switchedOff = new Set(switches.rows.filter((r) => !r.enabled).map((r) => r.symbol));
+  // Without a wallet nobody could be paid, and the published reward address may be one
+  // of a wallet that no longer exists: such a coin is not mined.
+  const switchedOff = new Set(switches.rows.filter((r) => !r.enabled || !r.wallet_seen).map((r) => r.symbol));
   const usable = COINS.flatMap((coin) => {
     const url = rpcUrl(server, coin, servers);
     const address = addresses[coin.symbol];
@@ -232,6 +235,8 @@ export async function nodeCompose(server: Server, poolUrl: string): Promise<stri
       ...(coin.nodeArgs?.[net] ?? []).map((arg) => `      - ${arg}`),
       "      - -server",
       "      - -disablewallet",
+      // Mining needs the current chain state, not the history: keep about 4 GB of blocks.
+      "      - -prune=4000",
       // Not reachable from the internet: bound to the private network, or unpublished.
       ...(mesh
         ? [`      - -rpcbind=${wgAddress(server.id)}`, "      - -rpcbind=127.0.0.1", `      - -rpcallowip=${WG_NETWORK}.0/24`]

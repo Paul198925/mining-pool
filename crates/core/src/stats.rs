@@ -71,15 +71,38 @@ pub async fn publish_pool_address(db: &PgPool, rpc: &RpcClient, coin_id: i32, co
     let address = match (&coin.pool_address, stored) {
         // An address from the configuration always wins.
         (Some(configured), stored) if stored.as_ref() != Some(configured) => configured.clone(),
-        (_, Some(_)) => return Ok(true),
-        (_, None) => match rpc.call("getnewaddress", json!(["pool", "legacy"])).await {
+        (Some(_), Some(_)) => return Ok(true),
+        // The stored address must belong to the wallet we are talking to. If the wallet was
+        // replaced, rewards sent to the old address would be lost for good.
+        (None, Some(stored)) if owned_by_wallet(rpc, &stored).await? => return Ok(true),
+        (None, Some(stored)) => {
+            tracing::warn!(coin = %coin.symbol, address = %stored, "the wallet does not own the published address, replacing it");
+            fresh_address(rpc).await?
+        }
+        (_, None) => fresh_address(rpc).await?,
+    };
+    sqlx::query("UPDATE coins SET pool_address = $2 WHERE id = $1").bind(coin_id).bind(&address).execute(db).await?;
+    tracing::info!(coin = %coin.symbol, %address, "pool address published");
+    Ok(true)
+}
+
+async fn owned_by_wallet(rpc: &RpcClient, address: &str) -> Result<bool> {
+    // Newer daemons answer this with getaddressinfo, older ones with validateaddress.
+    let info: Value = match rpc.call("getaddressinfo", json!([address])).await {
+        Ok(info) => info,
+        Err(err) if err.downcast_ref::<DaemonError>().is_some() => rpc.call("validateaddress", json!([address])).await?,
+        Err(err) => return Err(err),
+    };
+    Ok(info["ismine"] == true)
+}
+
+async fn fresh_address(rpc: &RpcClient) -> Result<String> {
+    Ok(
+        match rpc.call("getnewaddress", json!(["pool", "legacy"])).await {
             Ok(address) => address,
             // Older daemons know no address types.
             Err(err) if err.downcast_ref::<DaemonError>().is_some() => rpc.call("getnewaddress", json!(["pool"])).await?,
             Err(err) => return Err(err),
         },
-    };
-    sqlx::query("UPDATE coins SET pool_address = $2 WHERE id = $1").bind(coin_id).bind(&address).execute(db).await?;
-    tracing::info!(coin = %coin.symbol, %address, "pool address published");
-    Ok(true)
+    )
 }
