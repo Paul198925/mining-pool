@@ -15,6 +15,8 @@ export type Coin = {
   networkDifficulty: number | null;
   networkHashrate: number | null;
   stratumPort: number | null;
+  /** The internal exchange has a current price for it. */
+  exchangeable: boolean;
   blockMaturity: number | null;
   /** Base units (1e-8 coin) as a decimal string. */
   minPayout: string | null;
@@ -57,7 +59,7 @@ export type Payout = {
   createdAt: Date;
 };
 
-export type Credit = { height: number; status: Block["status"]; amount: string; foundAt: Date };
+export type Credit = { symbol: string; height: number; status: Block["status"]; amount: string; foundAt: Date };
 
 export type MinerAccount = {
   symbol: string;
@@ -70,6 +72,20 @@ export type MinerAccount = {
   payouts: Payout[];
   credits: Credit[];
   history: HashratePoint[];
+  /** Earned in other coins and not yet swapped into this account's coin. */
+  waiting: { symbol: string; amount: string }[];
+  exchanges: Exchange[];
+};
+
+/** A swap by the pool's internal exchange. Amounts are base units as decimal strings. */
+export type Exchange = {
+  id: string;
+  from: string;
+  to: string;
+  fromAmount: string;
+  toAmount: string;
+  feeAmount: string;
+  createdAt: Date;
 };
 
 export async function getCoins(): Promise<Coin[]> {
@@ -77,6 +93,7 @@ export async function getCoins(): Promise<Coin[]> {
   const { rows } = await db().query(
     `SELECT c.symbol, c.name, c.algo, c.height, c.network_difficulty, c.network_hashrate, c.stratum_port,
             c.block_maturity, c.min_payout, c.pool_fee_percent, c.solo_fee_percent,
+            COALESCE(c.price_at > now() - interval '20 minutes', FALSE) AS exchangeable,
             COALESCE(live.difficulty, 0) * $1 / $2 AS hashrate,
             COALESCE(live.miners, 0) AS miners, COALESCE(live.workers, 0) AS workers,
             (SELECT count(*) FROM blocks b WHERE b.coin_id = c.id AND b.status <> 'orphaned') AS blocks_found,
@@ -98,6 +115,7 @@ export async function getCoins(): Promise<Coin[]> {
     networkDifficulty: r.network_difficulty,
     networkHashrate: r.network_hashrate,
     stratumPort: r.stratum_port,
+    exchangeable: r.exchangeable,
     blockMaturity: r.block_maturity,
     minPayout: r.min_payout,
     poolFeePercent: r.pool_fee_percent,
@@ -190,7 +208,7 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
 
   return Promise.all(
     accounts.rows.map(async ({ id, coin_id, symbol }) => {
-      const [totals, workers, payouts, credits, history] = await Promise.all([
+      const [totals, workers, payouts, credits, history, waiting, exchanges] = await Promise.all([
         db().query(
           `SELECT
              (SELECT COALESCE(sum(amount), 0) FROM ledger_entries WHERE account_id = $1 AND coin_id = $2) AS balance,
@@ -217,14 +235,29 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
           [id],
         ),
         db().query(
-          `SELECT b.height, b.status, bc.amount, b.found_at
-           FROM block_credits bc JOIN blocks b ON b.id = bc.block_id
+          `SELECT b.height, b.status, bc.amount, b.found_at, c.symbol
+           FROM block_credits bc JOIN blocks b ON b.id = bc.block_id JOIN coins c ON c.id = b.coin_id
            WHERE bc.account_id = $1
            ORDER BY b.found_at DESC, b.id DESC
            LIMIT 20`,
           [id],
         ),
         getHistory({ accountId: id }),
+        db().query(
+          `SELECT c.symbol, sum(l.amount) AS amount
+           FROM ledger_entries l JOIN coins c ON c.id = l.coin_id
+           WHERE l.account_id = $1 AND l.coin_id <> $2
+           GROUP BY c.symbol HAVING sum(l.amount) > 0
+           ORDER BY c.symbol`,
+          [id, coin_id],
+        ),
+        db().query(
+          `SELECT e.id, f.symbol AS from_symbol, t.symbol AS to_symbol, e.from_amount, e.to_amount, e.fee_amount, e.created_at
+           FROM exchanges e JOIN coins f ON f.id = e.from_coin_id JOIN coins t ON t.id = e.to_coin_id
+           WHERE e.account_id = $1
+           ORDER BY e.id DESC LIMIT 20`,
+          [id],
+        ),
       ]);
       const t = totals.rows[0];
       return {
@@ -244,12 +277,23 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
           createdAt: r.created_at,
         })),
         credits: credits.rows.map((r) => ({
+          symbol: r.symbol,
           height: Number(r.height),
           status: r.status,
           amount: r.amount,
           foundAt: r.found_at,
         })),
         history,
+        waiting: waiting.rows.map((r) => ({ symbol: r.symbol, amount: r.amount })),
+        exchanges: exchanges.rows.map((r) => ({
+          id: r.id,
+          from: r.from_symbol,
+          to: r.to_symbol,
+          fromAmount: r.from_amount,
+          toAmount: r.to_amount,
+          feeAmount: r.fee_amount,
+          createdAt: r.created_at,
+        })),
       };
     }),
   );

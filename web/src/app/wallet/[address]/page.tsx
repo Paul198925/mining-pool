@@ -88,6 +88,11 @@ async function Wallet({ params }: Pick<PageProps<"/wallet/[address]">, "params">
         {accounts.map((account) => (
           <Earnings key={account.symbol} account={account} />
         ))}
+        {accounts
+          .filter((account) => account.waiting.length > 0 || account.exchanges.length > 0)
+          .map((account) => (
+            <Exchanges key={account.symbol} account={account} />
+          ))}
       </div>
     </div>
   );
@@ -171,11 +176,59 @@ function Earnings({ account }: { account: MinerAccount }) {
           <tbody>
             {account.credits.map((credit, index) => (
               <tr key={index}>
-                <td className="right">{credit.height}</td>
-                <td className="right">{formatAmount(credit.amount)}</td>
+                <td className="right">
+                  {credit.symbol} {credit.height}
+                </td>
+                <td className="right">
+                  {formatAmount(credit.amount)} {credit.symbol}
+                </td>
                 <td className="right">{formatAge(credit.foundAt)}</td>
                 <td className="right">
                   <BlockStatus status={credit.status} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Box>
+  );
+}
+
+function Exchanges({ account }: { account: MinerAccount }) {
+  return (
+    <Box title={`Exchange into ${account.symbol}`}>
+      {account.waiting.length > 0 && (
+        <ul>
+          <li>
+            Waiting to be swapped into {account.symbol}:{" "}
+            {account.waiting.map((item) => `${formatAmount(item.amount)} ${item.symbol}`).join(", ")}. The pool swaps
+            between its miners, so this happens as other miners swap the other way.
+          </li>
+        </ul>
+      )}
+      {account.exchanges.length > 0 && (
+        <table className="datagrid">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th className="right">Gave</th>
+              <th className="right">Got</th>
+              <th className="right">Fee</th>
+            </tr>
+          </thead>
+          <tbody>
+            {account.exchanges.map((exchange) => (
+              <tr key={exchange.id}>
+                <td>{formatAge(exchange.createdAt)}</td>
+                <td className="right">
+                  {formatAmount(exchange.fromAmount)} {exchange.from}
+                </td>
+                <td className="right">
+                  {formatAmount(exchange.toAmount)} {exchange.to}
+                </td>
+                <td className="right">
+                  {formatAmount(exchange.feeAmount)} {exchange.to}
                 </td>
               </tr>
             ))}

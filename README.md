@@ -61,6 +61,11 @@ Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334, RinHash 3
 
 **Merged Mining:** Auf dem Scrypt-Port arbeiten Miner an Litecoin; Dogecoin wird dabei mitgemint, ohne dass der Miner etwas davon merkt. Jeder Share wird auch als Dogecoin-Block geprüft und bei Erfolg dort eingereicht. Damit die Dogecoin ausgezahlt werden können, nennt der Miner seine Dogecoin-Adresse im Passwort: `-u <LTC-Adresse>.rig1 -p c=LTC,doge=<DOGE-Adresse>`. Ohne diese Angabe werden die Dogecoin dem Litecoin-Konto gutgeschrieben und bleiben dort als Guthaben stehen, denn an eine Litecoin-Adresse lassen sich keine Dogecoin senden. Direkt, also mit einer Dogecoin-Adresse als Benutzername, lässt sich Dogecoin nicht mehr minen. Welche Coin mit welcher mitgemint wird, steht als `aux_of` in der Konfiguration und als `auxOf` in `web/src/lib/catalog.ts`.
 
+**Interne Exchange:** Ein Miner kann sich in einer anderen Coin des Pools auszahlen lassen, als er mint. Er meldet sich mit der Adresse der Wunsch-Coin an und nennt sie im Passwort: `-u <DOGE-Adresse>.rig1 -p c=RVN,pay=DOGE`. Ohne `pay=` erkennt der Pool die Coin an der Adresse; `pay=` braucht es, wenn eine Adresse auf mehreren Ketten gültig ist. Was der Miner erwirtschaftet, tauscht `pool-core` alle fünf Minuten in seine Coin um, und zwar nur zwischen den Minern: Eine Coin wird nur so weit ausgegeben, wie andere Miner sie in derselben Runde eintauschen, zuzüglich der Gebühreneinnahmen, die der Pool in dieser Coin hält. Was nicht aufgeht, wartet auf eine spätere Runde. Der Pool verkauft nichts an einer Börse und schuldet nie eine Coin, die er nicht hat. Auch mitgeminte Dogecoin ohne eigene Adresse werden so in die Coin des Kontos getauscht.
+
+Die Kurse kommen von einer öffentlichen Kurs-API (CoinGecko); welche Coin dort wie heißt, steht als `price_id` in der Konfiguration. Eine Coin ohne `price_id` wird nicht getauscht. Ein Kurs, der älter als 20 Minuten ist, wird nicht benutzt, und ein Sprung um mehr als 15 % muss sich dreimal wiederholen, bevor er gilt. Gebühr und Ein/Aus stehen unter `/admin/exchange`, dort sieht man auch Kurse, Wartendes und die letzten Tausche.
+
+
 
 Für SpaceXpanse gibt es einen eigenen Test-Miner; die Adresse kommt vom SpaceXpanse-Node:
 

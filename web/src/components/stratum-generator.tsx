@@ -8,13 +8,25 @@ export type StratumServer = { region: string; host: string };
 
 type Mode = "pool" | "solo" | "party";
 
-/** Lets a miner pick server, algo, coin and reward mode and builds the matching miner arguments. */
-export function StratumGenerator({ coins, servers }: { coins: StratumCoin[]; servers: StratumServer[] }) {
+/**
+ * Lets a miner pick server, algo, coin and reward mode and builds the matching miner arguments.
+ * `payoutCoins`: coins the internal exchange can pay in instead of the mined one.
+ */
+export function StratumGenerator({
+  coins,
+  servers,
+  payoutCoins,
+}: {
+  coins: StratumCoin[];
+  servers: StratumServer[];
+  payoutCoins: { symbol: string; name: string }[];
+}) {
   const algos = [...new Set(coins.map((coin) => coin.algo))].sort();
   const [host, setHost] = useState(servers[0]?.host);
   const [algo, setAlgo] = useState(algos[0]);
   const [symbol, setSymbol] = useState(coins.find((coin) => coin.algo === algos[0])?.symbol);
   const [mode, setMode] = useState<Mode>("pool");
+  const [payout, setPayout] = useState("");
   const [party, setParty] = useState("");
   const [address, setAddress] = useState("");
   const [mergedAddress, setMergedAddress] = useState("");
@@ -29,8 +41,14 @@ export function StratumGenerator({ coins, servers }: { coins: StratumCoin[]; ser
     return null;
   }
 
-  const user = (address.trim() || `<${coin.symbol}_ADDRESS>`) + (worker.trim() ? `.${worker.trim()}` : "");
+  // Being paid in another coin needs a price for both, and is pointless for the mined coin itself.
+  const payoutChoices = payoutCoins.some((choice) => choice.symbol === coin.symbol)
+    ? payoutCoins.filter((choice) => choice.symbol !== coin.symbol)
+    : [];
+  const paidIn = payoutChoices.find((choice) => choice.symbol === payout)?.symbol ?? coin.symbol;
+  const user = (address.trim() || `<${paidIn}_ADDRESS>`) + (worker.trim() ? `.${worker.trim()}` : "");
   const options = [`c=${coin.symbol}`];
+  if (paidIn !== coin.symbol) options.push(`pay=${paidIn}`);
   const merged = coin.merged;
   if (merged && mergedAddress.trim()) options.push(`${merged.toLowerCase()}=${mergedAddress.trim()}`);
   if (mode === "solo") options.push("m=solo");
@@ -100,12 +118,28 @@ export function StratumGenerator({ coins, servers }: { coins: StratumCoin[]; ser
           </>
         )}
 
+        {payoutChoices.length > 0 && (
+          <>
+            <label htmlFor="gen-payout">Paid in</label>
+            <select id="gen-payout" value={paidIn} onChange={(event) => edit(setPayout)(event.target.value)}>
+              <option value={coin.symbol}>
+                {coin.name} ({coin.symbol})
+              </option>
+              {payoutChoices.map((choice) => (
+                <option key={choice.symbol} value={choice.symbol}>
+                  {choice.name} ({choice.symbol}), swapped by the pool
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+
         <label htmlFor="gen-address">Wallet</label>
         <input
           id="gen-address"
           className="text-input"
           value={address}
-          placeholder={`Your ${coin.symbol} address`}
+          placeholder={`Your ${paidIn} address`}
           spellCheck={false}
           onChange={(event) => edit(setAddress)(event.target.value.replace(/[^A-Za-z0-9]/g, ""))}
         />

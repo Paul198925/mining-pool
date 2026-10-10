@@ -16,6 +16,7 @@ const PAGES = [
   { href: "/admin/servers", label: "Servers" },
   { href: "/admin/stratum", label: "Stratum" },
   { href: "/admin/coins", label: "Coins" },
+  { href: "/admin/exchange", label: "Exchange" },
 ];
 
 export default function AdminLayout({ children }: LayoutProps<"/admin">) {

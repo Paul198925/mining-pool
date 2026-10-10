@@ -28,12 +28,14 @@ export default function AlgoPage({ params }: PageProps<"/algo/[algo]">) {
 
 async function Algo({ params }: Pick<PageProps<"/algo/[algo]">, "params">) {
   const { algo } = await params;
-  const coins = /^[a-z0-9-]{1,40}$/.test(algo) ? (await getCoins()).filter((coin) => coin.algo === algo) : [];
+  const all = /^[a-z0-9-]{1,40}$/.test(algo) ? await getCoins() : [];
+  const coins = all.filter((coin) => coin.algo === algo);
   if (coins.length === 0) {
     notFound();
   }
   const [servers, blocks] = await Promise.all([getStratumServers(), getBlocks(50, algo)]);
   const mineable = mineableCoins(coins);
+  const payoutCoins = all.filter((coin) => coin.exchangeable).map((coin) => ({ symbol: coin.symbol, name: coin.name }));
   const hashrate = coins.reduce((sum, coin) => sum + coin.hashrate, 0);
   const miners = coins.reduce((sum, coin) => sum + coin.miners, 0);
 
@@ -54,7 +56,7 @@ async function Algo({ params }: Pick<PageProps<"/algo/[algo]">, "params">) {
           {mineable.length === 0 || servers.length === 0 ? (
             <Empty>No stratum server is running for this algorithm.</Empty>
           ) : (
-            <StratumGenerator coins={mineable} servers={servers} />
+            <StratumGenerator coins={mineable} servers={servers} payoutCoins={payoutCoins} />
           )}
         </Box>
         {coins.map((coin) => (
