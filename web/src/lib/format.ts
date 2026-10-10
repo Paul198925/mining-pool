@@ -35,6 +35,28 @@ export function formatDifficulty(difficulty: number | null): string {
   return withUnit(difficulty, ["", "k", "M", "G", "T", "P"], 1000).trim();
 }
 
+/**
+ * How long it takes on average to find a block at `hashrate`: a block needs
+ * difficulty × 2^32 hashes. An average only; the next block can come at any moment.
+ */
+export function timeToFind(networkDifficulty: number | null, hashrate: number): number | null {
+  if (networkDifficulty === null || !(networkDifficulty > 0) || !(hashrate > 0)) return null;
+  return (networkDifficulty * 4294967296) / hashrate;
+}
+
+/** A time span in its two largest units, e.g. "3h 20m" or "12d 4h". */
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return "–";
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  if (days < 730) return `${days}d ${hours % 24}h`;
+  return `${(days / 365).toFixed(days < 36500 ? 1 : 0)} years`;
+}
+
 export function formatAge(date: Date | null, now = new Date()): string {
   if (!date) return "never";
   const seconds = Math.max(0, Math.round((now.getTime() - date.getTime()) / 1000));

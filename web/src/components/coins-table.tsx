@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { formatAge, formatAmount, formatDifficulty, formatHashrate } from "@/lib/format";
+import { formatAge, formatAmount, formatDifficulty, formatDuration, formatHashrate, timeToFind } from "@/lib/format";
 import type { Coin } from "@/lib/queries";
 
 import { Empty } from "./ui";
@@ -21,6 +21,9 @@ export function CoinsTable({ coins }: { coins: Coin[] }) {
           <th className="right">Difficulty</th>
           <th className="right">Net hash</th>
           <th className="right">Pool hash</th>
+          <th className="right" title="Time to find: how long the pool needs on average for one block at its current hashrate">
+            TTF
+          </th>
           <th className="right">Miners</th>
           <th className="right">Blocks</th>
           <th className="right">Last block</th>
@@ -41,6 +44,7 @@ export function CoinsTable({ coins }: { coins: Coin[] }) {
             <td className="right">{formatDifficulty(coin.networkDifficulty)}</td>
             <td className="right">{coin.networkHashrate === null ? "–" : formatHashrate(coin.networkHashrate)}</td>
             <td className="right">{formatHashrate(coin.hashrate)}</td>
+            <td className="right">{formatDuration(timeToFind(coin.networkDifficulty, coin.hashrate))}</td>
             <td className="right" title={`${coin.workers} workers`}>
               {coin.miners}
             </td>
