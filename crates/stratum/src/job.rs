@@ -15,8 +15,9 @@ const MAX_NTIME_AHEAD: u32 = 7200;
 const COINBASE_TAG: &[u8] = b"/pool/";
 /// Xaya's PowData algo byte for standalone Neoscrypt.
 const XAYA_ALGO_NEOSCRYPT: u8 = 0x02;
-/// The fake header's version and previous-hash fields mean nothing; these are the values miners are sent.
-const XAYA_FAKE_VERSION: [u8; 4] = [0x20, 0, 0, 0];
+/// The fake header's version field means nothing to the chain. Its last byte carries the
+/// stratum server's instance id, so that miners on different servers never hash the same data.
+const XAYA_FAKE_VERSION: [u8; 3] = [0x20, 0, 0];
 
 /// The subset of `getblocktemplate` this pool uses.
 #[derive(Debug, Clone, Deserialize)]
@@ -97,11 +98,19 @@ enum Work {
         coinbase: Vec<u8>,
         /// Compact target of the proof of work. Lives in the PowData, not in the block header.
         pow_bits: u32,
+        fake_version: [u8; 4],
     },
 }
 
 impl Job {
-    pub fn new(id: String, chain: Chain, template: &BlockTemplate, payout_script: &[u8], clean: bool) -> Result<Self> {
+    pub fn new(
+        id: String,
+        chain: Chain,
+        instance_id: u8,
+        template: &BlockTemplate,
+        payout_script: &[u8],
+        clean: bool,
+    ) -> Result<Self> {
         let prev_hash = hash_from_display_hex(&template.previousblockhash)?;
         let nbits = u32::from_str_radix(&template.bits, 16).context("template bits")?;
         let mut txids = Vec::with_capacity(template.transactions.len());
@@ -147,6 +156,8 @@ impl Job {
                 header_prefix.extend_from_slice(&root);
                 header_prefix.extend_from_slice(&template.curtime.to_le_bytes());
                 header_prefix.extend_from_slice(&[0u8; 4]); // nBits must be zero, the real ones are in the PowData
+                let [a, b, c] = XAYA_FAKE_VERSION;
+                let fake_version = [a, b, c, instance_id];
                 // To the miner the block header plays the role of the coinbase: it appends the
                 // extranonces, hashes the result, and that hash is the "merkle root" of the
                 // header it grinds, which is the fake header.
@@ -156,12 +167,12 @@ impl Job {
                     hex::encode(&header_prefix),
                     "",
                     [],
-                    hex::encode(XAYA_FAKE_VERSION),
+                    hex::encode(fake_version),
                     format!("{nbits:08x}"),
                     ntime,
                     clean,
                 ]);
-                (Work::Xaya { header_prefix, coinbase, pow_bits: nbits }, params)
+                (Work::Xaya { header_prefix, coinbase, pow_bits: nbits, fake_version }, params)
             }
         };
 
@@ -215,12 +226,12 @@ impl Job {
                 header[76..80].copy_from_slice(&nonce.to_le_bytes());
                 (algo.hash(&header), sha256d(&header), header.to_vec(), coinbase)
             }
-            Work::Xaya { header_prefix, coinbase, pow_bits } => {
+            Work::Xaya { header_prefix, coinbase, pow_bits, fake_version } => {
                 let header = [&header_prefix[..], &extranonce].concat();
                 let header_hash = sha256d(&header);
                 // The fake header, byte for byte as the miner's stratum fields spell it.
                 let mut fake = [0u8; 80];
-                fake[0..4].copy_from_slice(&XAYA_FAKE_VERSION);
+                fake[0..4].copy_from_slice(fake_version);
                 fake[36..68].copy_from_slice(&header_hash);
                 fake[68..72].copy_from_slice(&ntime.to_be_bytes());
                 fake[72..76].copy_from_slice(&pow_bits.to_be_bytes());
@@ -402,7 +413,7 @@ pub mod tests {
     #[test]
     fn share_becomes_a_well_formed_block() {
         let template = easy_template(3);
-        let job = Job::new("1".into(), Chain::Bitcoin, &template, &[0x51], true).unwrap();
+        let job = Job::new("1".into(), Chain::Bitcoin, 0, &template, &[0x51], true).unwrap();
         let share = job.check_share(Algo::Scrypt, &[0, 0, 0, 1], &[0, 0, 0, 2], template.curtime, 7).unwrap();
         let raw = hex::decode(share.block.expect("easy target").hex).unwrap();
 
@@ -419,7 +430,7 @@ pub mod tests {
     #[test]
     fn xaya_block_carries_powdata_with_a_fake_header_committing_to_the_real_one() {
         let template = easy_template(2);
-        let job = Job::new("1".into(), Chain::Xaya, &template, &[0x51], true).unwrap();
+        let job = Job::new("1".into(), Chain::Xaya, 9, &template, &[0x51], true).unwrap();
         let (ntime, nonce) = (template.curtime + 5, 0x0102_0304);
         let share = job.check_share(Algo::Neoscrypt, &[0xaa, 0xbb], &[0xcc, 0xdd], ntime, nonce).unwrap();
         let raw = hex::decode(share.block.expect("easy target").hex).unwrap();
@@ -437,6 +448,7 @@ pub mod tests {
         assert_eq!(raw[80], 0x02);
         assert_eq!(&raw[81..85], &0x207f_ffffu32.to_le_bytes());
         let fake = &raw[85..165];
+        assert_eq!(&fake[0..4], &[0x20, 0, 0, 9], "version field ends in the instance id");
         assert_eq!(&fake[36..68], &sha256d(&raw[0..80]));
         assert_eq!(&fake[68..72], &ntime.to_be_bytes());
         assert_eq!(&fake[76..80], &[1, 2, 3, 4]);
@@ -451,21 +463,21 @@ pub mod tests {
 
     #[test]
     fn xaya_notify_presents_the_block_header_as_the_coinbase() {
-        let job = Job::new("1".into(), Chain::Xaya, &easy_template(0), &[0x51], true).unwrap();
+        let job = Job::new("1".into(), Chain::Xaya, 9, &easy_template(0), &[0x51], true).unwrap();
         let notify: serde_json::Value = serde_json::from_str(&job.notify).unwrap();
         let params = &notify["params"];
         assert_eq!(params[1], "00".repeat(32));
         assert_eq!(params[2].as_str().unwrap().len(), 76 * 2);
         assert_eq!(params[3], "");
         assert_eq!(params[4], json!([]));
-        assert_eq!(params[5], "20000000");
+        assert_eq!(params[5], "20000009");
         assert_eq!(params[6], "207fffff");
     }
 
     #[test]
     fn rejects_duplicates_and_bad_input() {
         let template = easy_template(0);
-        let job = Job::new("1".into(), Chain::Bitcoin, &template, &[0x51], true).unwrap();
+        let job = Job::new("1".into(), Chain::Bitcoin, 0, &template, &[0x51], true).unwrap();
         let en1 = [0, 0, 0, 1];
         assert!(job.check_share(Algo::Scrypt, &en1, &[0; 4], template.curtime, 1).is_ok());
         assert_eq!(job.check_share(Algo::Scrypt, &en1, &[0; 4], template.curtime, 1).err(), Some(ShareError::Duplicate));

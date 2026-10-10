@@ -24,7 +24,8 @@ impl Chain {
     pub fn extranonce1_size(self) -> usize {
         match self {
             Self::Bitcoin => 4,
-            // Both extranonces together are the 4-byte nonce field of the block header.
+            // Both extranonces together are the 4-byte nonce field of the block header,
+            // and miners refuse an extranonce2 shorter than two bytes.
             Self::Xaya => 2,
         }
     }
@@ -33,6 +34,15 @@ impl Chain {
         match self {
             Self::Bitcoin => 4,
             Self::Xaya => 2,
+        }
+    }
+
+    /// Whether extranonce1 starts with the server's instance id. Where it does not,
+    /// the instance id has to enter the hashed data some other way (see `Job`).
+    pub fn instance_in_extranonce(self) -> bool {
+        match self {
+            Self::Bitcoin => true,
+            Self::Xaya => false,
         }
     }
 

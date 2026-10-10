@@ -23,6 +23,7 @@ pub async fn run(
     rpc: RpcClient,
     pool: Arc<Pool>,
     chain: Chain,
+    instance_id: u8,
     payout_script: Vec<u8>,
     jobs: watch::Sender<Option<Arc<Job>>>,
 ) {
@@ -62,7 +63,7 @@ pub async fn run(
             continue;
         }
 
-        match Job::new(format!("{next_id:x}"), chain, &template, &payout_script, clean) {
+        match Job::new(format!("{next_id:x}"), chain, instance_id, &template, &payout_script, clean) {
             Ok(job) => {
                 next_id += 1;
                 if clean {

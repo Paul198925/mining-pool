@@ -6,7 +6,7 @@ import { WalletSearch } from "@/components/miner-search";
 import { StratumGenerator } from "@/components/stratum-generator";
 import { Box, Empty, Skeleton } from "@/components/ui";
 import { formatHashrate } from "@/lib/format";
-import { getBlocks, getCoins } from "@/lib/queries";
+import { getBlocks, getCoins, getStratumServers } from "@/lib/queries";
 
 export default function Home() {
   return (
@@ -44,9 +44,7 @@ export default function Home() {
 }
 
 async function StratumServers() {
-  // Reading the coins first makes this render per request, so the host can come from the environment.
-  const coins = await getCoins();
-  const host = process.env.POOL_STRATUM_HOST ?? "localhost";
+  const [coins, servers] = await Promise.all([getCoins(), getStratumServers()]);
   const mineable = coins.flatMap((coin) =>
     coin.stratumPort === null
       ? []
@@ -56,17 +54,17 @@ async function StratumServers() {
     <Box title="STRATUM SERVERS">
       <ul>
         <li>
-          {mineable.length === 0 ? (
+          {mineable.length === 0 || servers.length === 0 ? (
             <Empty>No stratum server is running.</Empty>
           ) : (
-            <StratumGenerator coins={mineable} host={host} />
+            <StratumGenerator coins={mineable} servers={servers} />
           )}
         </li>
         <li>
-          Choose what you want to mine and enter your wallet address; the line above is what your miner needs. The
+          Choose a server near you and what you want to mine, and enter your wallet address; the line above is what your miner needs. The
           general form is:
           <p className="cmdline">
-            -a &lt;ALGO&gt; -o stratum+tcp://{host}:&lt;PORT&gt; -u &lt;WALLET_ADDRESS&gt;[.&lt;WORKER&gt;] [-p
+            -a &lt;ALGO&gt; -o stratum+tcp://&lt;SERVER&gt;:&lt;PORT&gt; -u &lt;WALLET_ADDRESS&gt;[.&lt;WORKER&gt;] [-p
             &lt;OPTIONS&gt;]
           </p>
         </li>

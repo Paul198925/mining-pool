@@ -1,0 +1,5 @@
+.git
+target
+reference
+web/node_modules
+web/.next

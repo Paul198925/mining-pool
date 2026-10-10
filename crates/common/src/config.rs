@@ -6,7 +6,8 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub database: Database,
-    pub redis: Redis,
+    #[serde(default)]
+    pub instance: Instance,
     /// One listener per algorithm.
     #[serde(default)]
     pub stratum: Vec<Stratum>,
@@ -20,9 +21,22 @@ pub struct Database {
     pub url: String,
 }
 
+/// Identifies one stratum process among several serving the same pool.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Redis {
-    pub url: String,
+pub struct Instance {
+    /// Must differ between stratum processes: it prefixes every miner's extranonce,
+    /// which keeps miners on different servers from doing the same work.
+    pub id: u8,
+    /// Shown to miners when they choose a server, e.g. "Europe".
+    pub region: String,
+    /// The public hostname miners connect to.
+    pub host: String,
+}
+
+impl Default for Instance {
+    fn default() -> Self {
+        Self { id: 0, region: "Default".into(), host: "localhost".into() }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,6 +71,7 @@ pub struct Coin {
     pub chain: String,
     pub rpc_url: String,
     pub rpc_user: String,
+    #[serde(default)]
     pub rpc_password: String,
     /// Where block rewards go. Unset means "ask the daemon wallet", which is only sane in dev.
     pub pool_address: Option<String>,
@@ -71,11 +86,51 @@ fn default_chain() -> String {
 }
 
 impl Config {
-    /// Reads the file named by `POOL_CONFIG`, or `config/dev.toml`.
+    /// Reads the file named by `POOL_CONFIG`, or `config/dev.toml`, then applies
+    /// overrides from the environment (see [`Config::apply_env`]).
     pub fn load() -> Result<Self> {
         let path = env::var("POOL_CONFIG").unwrap_or_else(|_| "config/dev.toml".into());
         let raw = fs::read_to_string(&path).with_context(|| format!("reading config {path}"))?;
-        toml::from_str(&raw).with_context(|| format!("parsing config {path}"))
+        let mut cfg: Self = toml::from_str(&raw).with_context(|| format!("parsing config {path}"))?;
+        cfg.apply_env(|name| env::var(name).ok().filter(|value| !value.is_empty()))?;
+        Ok(cfg)
+    }
+
+    /// Lets a deployment keep secrets and per-server settings out of the config file:
+    ///
+    /// - `DATABASE_URL`
+    /// - `POOL_INSTANCE_ID`, `POOL_REGION`, `POOL_STRATUM_HOST`
+    /// - per coin, with its symbol: `POOL_RPC_URL_<SYMBOL>`, `POOL_RPC_USER_<SYMBOL>`,
+    ///   `POOL_RPC_PASSWORD_<SYMBOL>`, `POOL_ADDRESS_<SYMBOL>`
+    fn apply_env(&mut self, var: impl Fn(&str) -> Option<String>) -> Result<()> {
+        if let Some(url) = var("DATABASE_URL") {
+            self.database.url = url;
+        }
+        if let Some(id) = var("POOL_INSTANCE_ID") {
+            self.instance.id = id.parse().context("POOL_INSTANCE_ID must be a number from 0 to 255")?;
+        }
+        if let Some(region) = var("POOL_REGION") {
+            self.instance.region = region;
+        }
+        if let Some(host) = var("POOL_STRATUM_HOST") {
+            self.instance.host = host;
+        }
+        for coin in &mut self.coins {
+            let symbol = coin.symbol.to_uppercase();
+            if let Some(url) = var(&format!("POOL_RPC_URL_{symbol}")) {
+                coin.rpc_url = url;
+            }
+            if let Some(user) = var(&format!("POOL_RPC_USER_{symbol}")) {
+                coin.rpc_user = user;
+            }
+            if let Some(password) = var(&format!("POOL_RPC_PASSWORD_{symbol}")) {
+                coin.rpc_password = password;
+            }
+            if let Some(address) = var(&format!("POOL_ADDRESS_{symbol}")) {
+                coin.pool_address = Some(address);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -83,10 +138,42 @@ impl Config {
 mod tests {
     use super::*;
 
+    fn dev() -> Config {
+        toml::from_str(include_str!("../../../config/dev.toml")).unwrap()
+    }
+
     #[test]
     fn dev_config_parses() {
-        let raw = include_str!("../../../config/dev.toml");
-        let cfg: Config = toml::from_str(raw).unwrap();
-        assert!(!cfg.coins.is_empty());
+        assert!(!dev().coins.is_empty());
+    }
+
+    #[test]
+    fn production_config_parses() {
+        let cfg: Config = toml::from_str(include_str!("../../../config/production.toml")).unwrap();
+        assert!(cfg.coins.iter().all(|coin| coin.rpc_password.is_empty()), "secrets come from the environment");
+    }
+
+    #[test]
+    fn environment_overrides_the_file() {
+        let mut cfg = dev();
+        cfg.apply_env(|name| match name {
+            "DATABASE_URL" => Some("postgres://prod".into()),
+            "POOL_INSTANCE_ID" => Some("7".into()),
+            "POOL_REGION" => Some("Europe".into()),
+            "POOL_RPC_PASSWORD_DOGE" => Some("secret".into()),
+            "POOL_ADDRESS_DOGE" => Some("DPoolAddress".into()),
+            _ => None,
+        })
+        .unwrap();
+        let doge = cfg.coins.iter().find(|coin| coin.symbol == "DOGE").unwrap();
+        assert_eq!(cfg.database.url, "postgres://prod");
+        assert_eq!((cfg.instance.id, cfg.instance.region.as_str()), (7, "Europe"));
+        assert_eq!((doge.rpc_password.as_str(), doge.pool_address.as_deref()), ("secret", Some("DPoolAddress")));
+        assert_eq!(doge.rpc_user, "pool", "untouched without an override");
+    }
+
+    #[test]
+    fn bad_instance_id_is_an_error() {
+        assert!(dev().apply_env(|name| (name == "POOL_INSTANCE_ID").then(|| "300".into())).is_err());
     }
 }

@@ -1,0 +1,67 @@
+# Production settings without secrets. Everything sensitive or server-specific comes
+# from environment variables (set them in Coolify):
+#
+#   DATABASE_URL                  all services
+#   POOL_INSTANCE_ID              stratum: 0-255, different on every stratum server
+#   POOL_REGION                   stratum: shown to miners, e.g. "Europe"
+#   POOL_STRATUM_HOST             stratum: public hostname of this server
+#   POOL_RPC_PASSWORD_<SYMBOL>    stratum and core, per coin
+#   POOL_RPC_URL_<SYMBOL>         optional, if a server reaches the daemon elsewhere
+#   POOL_ADDRESS_<SYMBOL>         stratum: where block rewards go (the pool wallet)
+#
+# Review fees, payout limits and the coin list before going live.
+
+[database]
+url = ""
+
+# One port per algorithm. The same ports are used on every stratum server.
+[[stratum]]
+listen = "0.0.0.0:3333"
+algo = "scrypt"
+start_difficulty = 8192.0
+min_difficulty = 16.0
+max_difficulty = 100000000.0
+share_target_secs = 15.0
+
+[[stratum]]
+listen = "0.0.0.0:3334"
+algo = "neoscrypt-xaya"
+start_difficulty = 4.0
+min_difficulty = 0.01
+max_difficulty = 1000000.0
+share_target_secs = 15.0
+
+[accounting]
+pplns_factor = 2.0
+pool_fee_percent = 1.0
+solo_fee_percent = 1.0
+payout_interval_secs = 3600
+
+[[coins]]
+symbol = "DOGE"
+name = "Dogecoin"
+algo = "scrypt"
+rpc_url = "http://dogecoin:22555"
+rpc_user = "pool"
+block_maturity = 240
+min_payout = 50.0
+
+[[coins]]
+symbol = "CHI"
+name = "Xaya"
+algo = "neoscrypt-xaya"
+chain = "xaya"
+rpc_url = "http://xaya:8396"
+rpc_user = "pool"
+block_maturity = 100
+min_payout = 5.0
+
+[[coins]]
+symbol = "ROD"
+name = "SpaceXpanse"
+algo = "neoscrypt-xaya"
+chain = "xaya"
+rpc_url = "http://spacexpanse:11999"
+rpc_user = "pool"
+block_maturity = 120
+min_payout = 50.0

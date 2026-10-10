@@ -1,6 +1,7 @@
 mod accounts;
 mod algo;
 mod chain;
+mod instance;
 mod job;
 mod pool;
 mod recorder;
@@ -72,12 +73,14 @@ async fn main() -> Result<()> {
     let cfg = Config::load()?;
     ensure!(!cfg.stratum.is_empty(), "no [[stratum]] listener configured");
     let db = pool_common::db::connect(&cfg).await?;
+    instance::register(&db, &cfg.instance).await?;
+    info!(id = cfg.instance.id, region = %cfg.instance.region, host = %cfg.instance.host, "stratum instance registered");
 
     let mut recorders = Vec::new();
     for listener in &cfg.stratum {
         let coins: Vec<&Coin> = cfg.coins.iter().filter(|coin| coin.algo == listener.algo).collect();
         ensure!(!coins.is_empty(), "no coin under [[coins]] uses algo {}", listener.algo);
-        let started = start_listener(listener, &coins, db.clone())
+        let started = start_listener(listener, &coins, cfg.instance.id, db.clone())
             .await
             .with_context(|| format!("starting stratum for {}", listener.algo))?;
         recorders.extend(started);
@@ -91,11 +94,12 @@ async fn main() -> Result<()> {
     for recorder in recorders {
         recorder.flush().await;
     }
+    instance::unregister(&db, &cfg.instance).await;
     Ok(())
 }
 
 /// Sets up every coin of one algorithm and starts accepting miners on the algorithm's port.
-async fn start_listener(settings: &Stratum, coins: &[&Coin], db: PgPool) -> Result<Vec<Recorder>> {
+async fn start_listener(settings: &Stratum, coins: &[&Coin], instance_id: u8, db: PgPool) -> Result<Vec<Recorder>> {
     // The extranonce layout is announced at subscribe, before the miner names a coin.
     let chain = Chain::from_name(&coins[0].chain)?;
     ensure!(
@@ -111,6 +115,7 @@ async fn start_listener(settings: &Stratum, coins: &[&Coin], db: PgPool) -> Resu
             max: settings.max_difficulty,
             share_target_secs: settings.share_target_secs,
         },
+        instance_id,
     ));
     let port_number: Option<i32> = settings.listen.rsplit(':').next().and_then(|port| port.parse().ok());
 
@@ -127,7 +132,7 @@ async fn start_listener(settings: &Stratum, coins: &[&Coin], db: PgPool) -> Resu
         let payout_script = payout_script(&rpc, coin).await.with_context(|| format!("coin {}", coin.symbol))?;
         let pool = Arc::new(Pool::default());
         let (job_tx, jobs) = watch::channel(None);
-        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, payout_script, job_tx));
+        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, instance_id, payout_script, job_tx));
         let recorder = Recorder::spawn(db.clone(), coin_id);
         contexts.push(CoinCtx { symbol: coin.symbol.clone(), coin_id, rpc, pool, recorder, jobs });
     }

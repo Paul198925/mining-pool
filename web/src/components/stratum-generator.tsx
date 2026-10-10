@@ -3,12 +3,14 @@
 import { useState } from "react";
 
 export type StratumCoin = { symbol: string; name: string; algo: string; port: number };
+export type StratumServer = { region: string; host: string };
 
 type Mode = "pool" | "solo" | "party";
 
-/** Lets a miner pick algo, coin and reward mode and builds the matching miner arguments. */
-export function StratumGenerator({ coins, host }: { coins: StratumCoin[]; host: string }) {
+/** Lets a miner pick server, algo, coin and reward mode and builds the matching miner arguments. */
+export function StratumGenerator({ coins, servers }: { coins: StratumCoin[]; servers: StratumServer[] }) {
   const algos = [...new Set(coins.map((coin) => coin.algo))].sort();
+  const [host, setHost] = useState(servers[0]?.host);
   const [algo, setAlgo] = useState(algos[0]);
   const [symbol, setSymbol] = useState(coins.find((coin) => coin.algo === algos[0])?.symbol);
   const [mode, setMode] = useState<Mode>("pool");
@@ -19,7 +21,9 @@ export function StratumGenerator({ coins, host }: { coins: StratumCoin[]; host: 
 
   const choices = coins.filter((coin) => coin.algo === algo);
   const coin = choices.find((choice) => choice.symbol === symbol) ?? choices[0];
-  if (!coin) {
+  // A server can disappear between refreshes; fall back to one that is still there.
+  const server = servers.find((candidate) => candidate.host === host) ?? servers[0];
+  if (!coin || !server) {
     return null;
   }
 
@@ -27,7 +31,7 @@ export function StratumGenerator({ coins, host }: { coins: StratumCoin[]; host: 
   const options = [`c=${coin.symbol}`];
   if (mode === "solo") options.push("m=solo");
   if (mode === "party") options.push(`m=party.${party.trim() || "<NAME>"}`);
-  const command = `-a ${coin.algo} -o stratum+tcp://${host}:${coin.port} -u ${user} -p ${options.join(",")}`;
+  const command = `-a ${coin.algo} -o stratum+tcp://${server.host}:${coin.port} -u ${user} -p ${options.join(",")}`;
 
   // Any edit makes a previous "Copied" stale.
   const edit = <T,>(set: (value: T) => void) => (value: T) => {
@@ -38,6 +42,15 @@ export function StratumGenerator({ coins, host }: { coins: StratumCoin[]; host: 
   return (
     <div>
       <div className="generator">
+        <label htmlFor="gen-server">Server</label>
+        <select id="gen-server" value={server.host} onChange={(event) => edit(setHost)(event.target.value)}>
+          {servers.map((candidate) => (
+            <option key={candidate.host} value={candidate.host}>
+              {candidate.region} ({candidate.host})
+            </option>
+          ))}
+        </select>
+
         <label htmlFor="gen-algo">Algo</label>
         <select
           id="gen-algo"

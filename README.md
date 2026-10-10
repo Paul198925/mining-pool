@@ -23,7 +23,7 @@ Voraussetzungen: Docker, Rust, Node.js.
 docker compose up -d --build --wait
 ```
 
-Startet PostgreSQL (Port 55432), Redis (56379), zwei Dogecoin-Nodes (RPC auf 18332) sowie je einen Xaya- und SpaceXpanse-Node (RPC auf 18493 und 18499), alle im Regtest-Modus. Alles ist nur an 127.0.0.1 gebunden.
+Startet PostgreSQL (Port 55432), zwei Dogecoin-Nodes (RPC auf 18332) sowie je einen Xaya- und SpaceXpanse-Node (RPC auf 18493 und 18499), alle im Regtest-Modus. Alles ist nur an 127.0.0.1 gebunden.
 
 Auf einer frischen Regtest-Chain einmalig Blöcke erzeugen, sonst liefert der Node keine Block-Templates:
 
@@ -82,6 +82,32 @@ JSON-API für Miner und Dritt-Tools:
 | `/api/pool` | Coins mit Pool- und Netzwerk-Statistik |
 | `/api/blocks?limit=50` | zuletzt gefundene Blöcke |
 | `/api/miners/<Adresse>` | Hashrate, Guthaben, Worker, Auszahlungen eines Miners |
+
+## Betrieb auf mehreren Servern
+
+Der Pool besteht aus drei Diensten, die sich nur die Datenbank teilen:
+
+| Dienst | Wie oft | Aufgabe |
+|---|---|---|
+| `pool-stratum` | einer je Region | nimmt Miner an, prüft Shares, reicht Blöcke ein |
+| `pool-core` | genau einer | Abrechnung und Auszahlungen; eine zweite Instanz verweigert den Start |
+| `web` | einer | Website und JSON-API |
+
+Jeder Stratum-Server braucht eine eigene Nummer (`POOL_INSTANCE_ID`, 0 bis 255). Sie sorgt dafür, dass Miner auf verschiedenen Servern nie dieselbe Arbeit rechnen; eine doppelt vergebene Nummer wird beim Start abgelehnt. Die Server melden sich in der Datenbank an, und die Website bietet die erreichbaren zur Auswahl an.
+
+`pool-stratum` und `pool-core` werden aus `docker/pool/Dockerfile` gebaut (Ziele `stratum` und `core`) und lesen `config/production.toml`. Geheimnisse und alles Server-Spezifische kommen aus Umgebungsvariablen:
+
+| Variable | Dienst | Inhalt |
+|---|---|---|
+| `DATABASE_URL` | alle | PostgreSQL-Verbindung |
+| `POOL_INSTANCE_ID` | Stratum | eindeutige Nummer des Servers |
+| `POOL_REGION` | Stratum | Anzeigename für Miner, z. B. „Europe“ |
+| `POOL_STRATUM_HOST` | Stratum | öffentlicher Hostname des Servers |
+| `POOL_RPC_PASSWORD_<SYMBOL>` | Stratum, Core | RPC-Passwort des Coin-Nodes |
+| `POOL_RPC_URL_<SYMBOL>` | Stratum, Core | optional, abweichende Adresse des Coin-Nodes |
+| `POOL_ADDRESS_<SYMBOL>` | Stratum | Adresse des Pool-Wallets für Block-Belohnungen |
+
+Die Uhren aller Server müssen per NTP synchron laufen, weil Shares und Blöcke über ihren Zeitstempel zugeordnet werden.
 
 Tests:
 

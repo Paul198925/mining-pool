@@ -4,8 +4,11 @@
 [database]
 url = "postgres://pool:pooldev@127.0.0.1:55432/pool"
 
-[redis]
-url = "redis://127.0.0.1:56379"
+# Identifies this stratum process; see config/production.toml for running several.
+[instance]
+id = 1
+region = "Local"
+host = "localhost"
 
 # One port per algorithm. Miners pick the coin with "c=<SYMBOL>" in the password;
 # without it the coin is recognised from the payout address.

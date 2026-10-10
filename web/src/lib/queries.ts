@@ -110,6 +110,19 @@ export async function getCoins(): Promise<Coin[]> {
   }));
 }
 
+export type StratumServer = { region: string; host: string };
+
+/** Stratum servers that reported in recently; the limit matches the servers' own (instance.rs). */
+export async function getStratumServers(): Promise<StratumServer[]> {
+  await connection();
+  const { rows } = await db().query(
+    `SELECT DISTINCT region, host FROM stratum_instances
+     WHERE last_seen_at > now() - interval '120 seconds'
+     ORDER BY region, host`,
+  );
+  return rows;
+}
+
 export async function getBlocks(limit: number): Promise<Block[]> {
   await connection();
   const { rows } = await db().query(

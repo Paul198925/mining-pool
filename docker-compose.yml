@@ -19,16 +19,6 @@ services:
       timeout: 3s
       retries: 20
 
-  redis:
-    image: redis:8-alpine
-    ports:
-      - "127.0.0.1:56379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
   # Regtest: a private chain with instant blocks, no sync and no real coins.
   dogecoin:
     build: docker/dogecoin

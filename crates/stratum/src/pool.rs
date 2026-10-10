@@ -16,18 +16,28 @@ pub struct Port {
     pub algo: Algo,
     pub chain: Chain,
     pub vardiff: VarDiffConfig,
+    instance_id: u8,
     next_extranonce1: AtomicU32,
 }
 
 impl Port {
-    pub fn new(algo: Algo, chain: Chain, vardiff: VarDiffConfig) -> Self {
-        Self { algo, chain, vardiff, next_extranonce1: AtomicU32::new(1) }
+    pub fn new(algo: Algo, chain: Chain, vardiff: VarDiffConfig, instance_id: u8) -> Self {
+        Self { algo, chain, vardiff, instance_id, next_extranonce1: AtomicU32::new(1) }
     }
 
-    /// Distinct per connection until the counter wraps around the chain's extranonce size.
+    /// A per-connection counter, led by the instance id where the chain has room for it.
+    /// Distinct per connection until the counter wraps (after 2^24 connections, or 2^16
+    /// on Xaya-style chains).
     pub fn next_extranonce1(&self) -> Vec<u8> {
         let counter = self.next_extranonce1.fetch_add(1, Ordering::Relaxed).to_be_bytes();
-        counter[4 - self.chain.extranonce1_size()..].to_vec()
+        let size = self.chain.extranonce1_size();
+        if self.chain.instance_in_extranonce() {
+            let mut extranonce1 = vec![self.instance_id];
+            extranonce1.extend_from_slice(&counter[4 - (size - 1)..]);
+            extranonce1
+        } else {
+            counter[4 - size..].to_vec()
+        }
     }
 }
 

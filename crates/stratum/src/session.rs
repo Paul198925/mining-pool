@@ -247,11 +247,11 @@ mod tests {
 
     fn session(start_diff: f64) -> Session {
         let vardiff = VarDiffConfig { start: start_diff, min: 1e-9, max: 1e12, share_target_secs: 15.0 };
-        Session::new(Arc::new(Port::new(Algo::Scrypt, Chain::Bitcoin, vardiff)), Instant::now())
+        Session::new(Arc::new(Port::new(Algo::Scrypt, Chain::Bitcoin, vardiff, 5)), Instant::now())
     }
 
     fn publish(pool: &Pool, id: &str, clean: bool) -> Arc<Job> {
-        let job = Arc::new(Job::new(id.into(), Chain::Bitcoin, &easy_template(1), &[0x51], clean).unwrap());
+        let job = Arc::new(Job::new(id.into(), Chain::Bitcoin, 0, &easy_template(1), &[0x51], clean).unwrap());
         pool.add_job(job.clone());
         job
     }
@@ -284,7 +284,7 @@ mod tests {
         let subscribed = s.handle_line(SUBSCRIBE, None, Instant::now()).lines;
         assert_eq!(subscribed.len(), 1);
         let reply = parse(&subscribed[0]);
-        assert_eq!(reply["result"][1], "00000001");
+        assert_eq!(reply["result"][1], "05000001", "instance id, then the connection counter");
         assert_eq!(reply["result"][2], 4);
 
         let lines = authorize(&mut s, &pool, Some(&job));
@@ -306,10 +306,10 @@ mod tests {
     #[test]
     fn sessions_get_distinct_extranonces() {
         let vardiff = VarDiffConfig { start: 1.0, min: 1e-9, max: 1e12, share_target_secs: 15.0 };
-        let port = Arc::new(Port::new(Algo::Neoscrypt, Chain::Xaya, vardiff));
+        let port = Arc::new(Port::new(Algo::Neoscrypt, Chain::Xaya, vardiff, 5));
         let (a, b) = (Session::new(port.clone(), Instant::now()), Session::new(port, Instant::now()));
         assert_ne!(a.extranonce1, b.extranonce1);
-        assert_eq!(a.extranonce1.len(), 2);
+        assert_eq!((a.extranonce1.as_slice(), b.extranonce1.as_slice()), (&[0, 1][..], &[0, 2][..]));
     }
 
     #[test]
