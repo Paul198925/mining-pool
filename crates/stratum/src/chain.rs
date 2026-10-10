@@ -47,8 +47,9 @@ impl Chain {
     }
 
     /// Parameters for the daemon's `getblocktemplate`.
-    pub fn template_request(self) -> Value {
+    pub fn template_request(self, segwit: bool) -> Value {
         match self {
+            Self::Bitcoin if segwit => json!([{ "rules": ["segwit"] }]),
             Self::Bitcoin => json!([{}]),
             // Neoscrypt is the only algorithm Xaya allows outside merged mining.
             Self::Xaya => json!([{ "rules": ["segwit"], "algo": "neoscrypt" }]),
