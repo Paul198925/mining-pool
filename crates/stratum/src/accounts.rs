@@ -41,6 +41,35 @@ pub struct AuxCandidate<'a> {
     pub rpc: &'a RpcClient,
 }
 
+/// What a connection said about itself, shown to the miner on their wallet page.
+pub struct Connection<'a> {
+    /// The mining software, as named at subscribe.
+    pub agent: Option<&'a str>,
+    /// The algorithm of the port it connected to.
+    pub algo: &'a str,
+}
+
+/// Printable, bounded text for the database, whatever a client sent.
+fn tidy(text: &str, max: usize) -> String {
+    text.chars().filter(|c| !c.is_control()).take(max).collect()
+}
+
+/// The password options as they may be shown: a party's name is its secret key.
+fn shown_password(password: &str) -> String {
+    let options: Vec<String> = password
+        .split(',')
+        .map(|option| {
+            let trimmed = option.trim();
+            if trimmed.get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("m=party.")) {
+                "m=party.***".to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        })
+        .collect();
+    tidy(&options.join(","), 200)
+}
+
 /// A coin this server knows a daemon for: miners can ask to be paid in it.
 pub struct PayoutCoin<'a> {
     pub coin_id: i32,
@@ -80,6 +109,7 @@ pub async fn resolve(
     backend: &Backend,
     candidates: &[Candidate<'_>],
     payout_coins: &[PayoutCoin<'_>],
+    connection: &Connection<'_>,
     user: &str,
     password: &str,
 ) -> Result<Option<(usize, WorkerIds, Option<WorkerIds>)>> {
@@ -144,14 +174,20 @@ pub async fn resolve(
         _ => None,
     };
     let solo = mode == Mode::Solo;
+    let details = WorkerDetails {
+        version: connection.agent.map(|agent| tidy(agent, 100)),
+        password: shown_password(password),
+        algo: connection.algo.to_owned(),
+    };
     let ids = match backend {
         Backend::Direct(db) => {
-            register(db, payout_coin_id, address, worker, solo, coin_id, party_key.as_deref()).await?
+            register(db, payout_coin_id, address, worker, solo, coin_id, party_key.as_deref(), &details).await?
         }
         Backend::Api(api) => {
             let login = json!({
                 "symbol": mined.symbol, "payout_symbol": payout_symbol, "address": address, "worker": worker,
                 "solo": solo, "party_key_hash": party_key,
+                "version": details.version, "password": details.password, "algo": details.algo,
             });
             api.post("/api/node/authorize", &login).await?
         }
@@ -177,12 +213,14 @@ pub async fn resolve(
     };
     let aux_ids = match backend {
         Backend::Direct(db) => {
-            register(db, account_coin, account_address, worker, solo, aux.coin_id, party_key.as_deref()).await?
+            register(db, account_coin, account_address, worker, solo, aux.coin_id, party_key.as_deref(), &details)
+                .await?
         }
         Backend::Api(api) => {
             let login = json!({
                 "symbol": aux.symbol, "payout_symbol": account_symbol, "address": account_address,
                 "worker": worker, "solo": solo, "party_key_hash": party_key,
+                "version": details.version, "password": details.password, "algo": details.algo,
             });
             api.post("/api/node/authorize", &login).await?
         }
@@ -190,8 +228,16 @@ pub async fn resolve(
     Ok(Some((index, ids, Some(aux_ids))))
 }
 
+/// What is kept about a worker's latest login.
+struct WorkerDetails {
+    version: Option<String>,
+    password: String,
+    algo: String,
+}
+
 /// Maps a login to the pool's account, worker and party ids, creating them on first sight.
 /// The account belongs to the coin its address is on; a party is per mined coin.
+#[allow(clippy::too_many_arguments)]
 async fn register(
     db: &PgPool,
     account_coin_id: i32,
@@ -200,6 +246,7 @@ async fn register(
     solo: bool,
     party_coin_id: i32,
     party_key: Option<&str>,
+    details: &WorkerDetails,
 ) -> Result<WorkerIds> {
     let account_id: i64 = sqlx::query_scalar(
         "INSERT INTO accounts (payout_coin_id, payout_address) VALUES ($1, $2)
@@ -211,12 +258,16 @@ async fn register(
     .fetch_one(db)
     .await?;
     let worker_id: i64 = sqlx::query_scalar(
-        "INSERT INTO workers (account_id, name, last_seen_at) VALUES ($1, $2, now())
-         ON CONFLICT (account_id, name) DO UPDATE SET last_seen_at = now()
+        "INSERT INTO workers (account_id, name, last_seen_at, version, password, algo) VALUES ($1, $2, now(), $3, $4, $5)
+         ON CONFLICT (account_id, name) DO UPDATE
+             SET last_seen_at = now(), version = EXCLUDED.version, password = EXCLUDED.password, algo = EXCLUDED.algo
          RETURNING id",
     )
     .bind(account_id)
     .bind(worker)
+    .bind(&details.version)
+    .bind(&details.password)
+    .bind(&details.algo)
     .fetch_one(db)
     .await?;
     let party_id = match party_key {
@@ -285,6 +336,15 @@ mod tests {
         assert_eq!(option("x", "c"), None);
         assert_eq!(option("c=", "c"), None);
         assert_eq!(option("c=LTC,pay=DOGE", "pay"), Some("DOGE"));
+    }
+
+    #[test]
+    fn a_party_name_is_not_shown() {
+        assert_eq!(shown_password("c=RIN, m=party.Friends42 ,doge=DAbc"), "c=RIN,m=party.***,doge=DAbc");
+        assert_eq!(shown_password("M=PARTY.secret"), "m=party.***");
+        assert_eq!(shown_password("x"), "x");
+        assert_eq!(shown_password(&"a".repeat(500)).len(), 200);
+        assert_eq!(tidy("xmrig/6\u{7}\n", 100), "xmrig/6");
     }
 
     #[test]

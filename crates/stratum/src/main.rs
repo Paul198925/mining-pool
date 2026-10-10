@@ -35,7 +35,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    accounts::{AuxCandidate, Candidate, PayoutCoin, WorkerIds},
+    accounts::{AuxCandidate, Candidate, Connection, PayoutCoin, WorkerIds},
     algo::Algo,
     backend::{ApiClient, Backend},
     chain::Chain,
@@ -43,7 +43,7 @@ use crate::{
     job::{FoundBlock, Job},
     pool::{Pool, Port},
     recorder::{BlockEvent, Recorder, ShareEvent, Sink},
-    session::{AcceptedShare, Login, Session},
+    session::{AcceptedShare, AuthRequest, Login, Session},
     vardiff::VarDiffConfig,
 };
 
@@ -83,6 +83,8 @@ struct AuxCtx {
 #[derive(Clone)]
 struct Server {
     port: Arc<Port>,
+    /// The port's algorithm as it is named in the configuration, e.g. "neoscrypt-xaya".
+    algo_name: Arc<str>,
     backend: Backend,
     coins: Arc<Vec<CoinCtx>>,
     /// Every coin this server has a daemon for, on whatever port: miners can be paid in these.
@@ -235,7 +237,13 @@ async fn start_listener(
         .flatten()
         .collect();
     let symbols: Vec<&str> = coins.iter().map(|coin| coin.symbol.as_str()).collect();
-    let ctx = Server { port, backend, coins: Arc::new(contexts), payout_coins };
+    let ctx = Server {
+        port,
+        algo_name: settings.algo.as_str().into(),
+        backend,
+        coins: Arc::new(contexts),
+        payout_coins,
+    };
 
     let listener = TcpListener::bind(&settings.listen).await.with_context(|| format!("binding {}", settings.listen))?;
     info!(listen = %settings.listen, algo = %settings.algo, coins = %symbols.join(","), "stratum listening");
@@ -317,7 +325,7 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
                     record_share(coin, share);
                 }
                 if let Some(request) = out.auth {
-                    let login = login(&ctx, &coin, &request.user, &request.password).await.unwrap_or_else(|err| {
+                    let login = login(&ctx, &coin, &request).await.unwrap_or_else(|err| {
                         warn!(%peer, "authorize failed: {err:#}");
                         None
                     });
@@ -370,8 +378,7 @@ async fn next_job(coin: &mut Option<CoinCtx>) -> Option<Arc<Job>> {
 async fn login(
     ctx: &Server,
     current: &Option<CoinCtx>,
-    user: &str,
-    password: &str,
+    request: &AuthRequest,
 ) -> Result<Option<(CoinCtx, WorkerIds, Option<WorkerIds>)>> {
     let candidates: Vec<Candidate> = ctx
         .coins
@@ -389,7 +396,10 @@ async fn login(
         .iter()
         .map(|coin| PayoutCoin { coin_id: coin.coin_id, symbol: &coin.symbol, rpc: &coin.rpc })
         .collect();
-    let resolved = accounts::resolve(&ctx.backend, &candidates, &payout_coins, user, password).await?;
+    let connection = Connection { agent: request.agent.as_deref(), algo: &ctx.algo_name };
+    let resolved =
+        accounts::resolve(&ctx.backend, &candidates, &payout_coins, &connection, &request.user, &request.password)
+            .await?;
     let Some((index, worker, aux_worker)) = resolved else {
         return Ok(None);
     };

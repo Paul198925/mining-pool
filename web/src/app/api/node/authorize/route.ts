@@ -37,11 +37,16 @@ export async function POST(request: Request) {
      RETURNING id`,
     [payoutCoinId, address],
   );
+  // What the worker logged in with, for the miner's wallet page. The server has already
+  // blanked a party name; here only length and control characters are bounded.
+  const shown = (value: unknown, max: number): string | null =>
+    typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, max) : null;
   const workerRow = await db().query(
-    `INSERT INTO workers (account_id, name, last_seen_at) VALUES ($1, $2, now())
-     ON CONFLICT (account_id, name) DO UPDATE SET last_seen_at = now()
+    `INSERT INTO workers (account_id, name, last_seen_at, version, password, algo) VALUES ($1, $2, now(), $3, $4, $5)
+     ON CONFLICT (account_id, name) DO UPDATE
+         SET last_seen_at = now(), version = EXCLUDED.version, password = EXCLUDED.password, algo = EXCLUDED.algo
      RETURNING id`,
-    [account.rows[0].id, worker],
+    [account.rows[0].id, worker, shown(body?.version, 100), shown(body?.password, 200), shown(body?.algo, 40)],
   );
   let partyId: string | null = null;
   if (partyKeyHash) {

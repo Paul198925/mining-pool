@@ -56,6 +56,8 @@ pub struct AuthRequest {
     id: Value,
     pub user: String,
     pub password: String,
+    /// The mining software as it named itself at subscribe, if it has subscribed already.
+    pub agent: Option<String>,
 }
 
 /// A successful login: who the miner is and which coin's work they get.
@@ -73,6 +75,7 @@ pub struct Session {
     port: Arc<Port>,
     extranonce1: Vec<u8>,
     subscribed: bool,
+    agent: Option<String>,
     login: Option<Login>,
     vardiff: VarDiff,
     /// Difficulty each job was sent with; shares are judged against that, not the current one.
@@ -86,6 +89,7 @@ impl Session {
             vardiff: VarDiff::new(port.vardiff, now),
             port,
             subscribed: false,
+            agent: None,
             login: None,
             job_diffs: HashMap::new(),
         }
@@ -120,13 +124,16 @@ impl Session {
                 };
                 out.lines.push(ok(req.id, result));
                 self.subscribed = true;
+                // Miners name themselves in the first parameter, e.g. "cpuminer/2.5".
+                self.agent = req.params.first().and_then(Value::as_str).map(str::to_owned);
                 out.lines.extend(self.start_work(current));
             }
             // Username is "<payout address>[.<worker name>]"; checking it needs the daemon and database.
             "mining.authorize" => match req.params.first().and_then(Value::as_str).map(str::trim) {
                 Some(user) if !user.is_empty() => {
                     let password = req.params.get(1).and_then(Value::as_str).unwrap_or_default().to_owned();
-                    out.auth = Some(AuthRequest { id: req.id, user: user.to_owned(), password });
+                    let agent = self.agent.clone();
+                    out.auth = Some(AuthRequest { id: req.id, user: user.to_owned(), password, agent });
                 }
                 _ => out.lines.push(error(req.id, ERR_UNAUTHORIZED, "Unauthorized worker")),
             },
