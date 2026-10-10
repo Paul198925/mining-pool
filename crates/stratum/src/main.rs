@@ -34,7 +34,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    accounts::{AuxCandidate, Candidate, WorkerIds},
+    accounts::{AuxCandidate, Candidate, PayoutCoin, WorkerIds},
     algo::Algo,
     backend::{ApiClient, Backend},
     chain::Chain,
@@ -78,6 +78,14 @@ struct Server {
     port: Arc<Port>,
     backend: Backend,
     coins: Arc<Vec<CoinCtx>>,
+    /// Every coin this server has a daemon for, on whatever port: miners can be paid in these.
+    payout_coins: Arc<Vec<PayoutCtx>>,
+}
+
+struct PayoutCtx {
+    symbol: String,
+    coin_id: i32,
+    rpc: RpcClient,
 }
 
 #[tokio::main]
@@ -103,6 +111,13 @@ async fn main() -> Result<()> {
     }
     info!(id = cfg.instance.id, region = %cfg.instance.region, host = %cfg.instance.host, "stratum instance started");
 
+    let mut payout_coins = Vec::new();
+    for coin in &cfg.coins {
+        let (coin_id, _) = open_coin(&backend, coin, None).await?;
+        payout_coins.push(PayoutCtx { symbol: coin.symbol.clone(), coin_id, rpc: RpcClient::new(coin)? });
+    }
+    let payout_coins = Arc::new(payout_coins);
+
     let mut recorders = Vec::new();
     for listener in &cfg.stratum {
         let coins: Vec<&Coin> = cfg.coins.iter().filter(|coin| coin.algo == listener.algo).collect();
@@ -110,7 +125,7 @@ async fn main() -> Result<()> {
             warn!(algo = %listener.algo, "no coin uses this algo, its port stays closed");
             continue;
         }
-        let started = start_listener(listener, &coins, cfg.instance.id, backend.clone())
+        let started = start_listener(listener, &coins, cfg.instance.id, backend.clone(), payout_coins.clone())
             .await
             .with_context(|| format!("starting stratum for {}", listener.algo))?;
         recorders.extend(started);
@@ -148,6 +163,7 @@ async fn start_listener(
     coins: &[&Coin],
     instance_id: u8,
     backend: Backend,
+    payout_coins: Arc<Vec<PayoutCtx>>,
 ) -> Result<Vec<Recorder>> {
     // Merge-mined coins have no miners of their own: they ride along with their parent.
     let (merged, coins): (Vec<&Coin>, Vec<&Coin>) = coins.iter().copied().partition(|coin| coin.aux_of.is_some());
@@ -212,7 +228,7 @@ async fn start_listener(
         .flatten()
         .collect();
     let symbols: Vec<&str> = coins.iter().map(|coin| coin.symbol.as_str()).collect();
-    let ctx = Server { port, backend, coins: Arc::new(contexts) };
+    let ctx = Server { port, backend, coins: Arc::new(contexts), payout_coins };
 
     let listener = TcpListener::bind(&settings.listen).await.with_context(|| format!("binding {}", settings.listen))?;
     info!(listen = %settings.listen, algo = %settings.algo, coins = %symbols.join(","), "stratum listening");
@@ -242,12 +258,14 @@ async fn open_coin(backend: &Backend, coin: &Coin, port_number: Option<i32>) -> 
     match backend {
         Backend::Direct(db) => {
             let coin_id = pool_common::db::ensure_coin(db, coin).await?;
-            // Published so the website can tell miners where to connect.
-            sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1")
-                .bind(coin_id)
-                .bind(port_number)
-                .execute(db)
-                .await?;
+            if port_number.is_some() {
+                // Published so the website can tell miners where to connect.
+                sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1")
+                    .bind(coin_id)
+                    .bind(port_number)
+                    .execute(db)
+                    .await?;
+            }
             Ok((coin_id, Sink::Direct { db: db.clone(), coin_id }))
         }
         // The pool registered the coin when it handed out this server's configuration.
@@ -338,7 +356,13 @@ async fn login(
             aux: coin.aux.as_ref().map(|aux| AuxCandidate { coin_id: aux.coin_id, symbol: &aux.symbol, rpc: &aux.rpc }),
         })
         .collect();
-    let Some((index, worker, aux_worker)) = accounts::resolve(&ctx.backend, &candidates, user, password).await? else {
+    let payout_coins: Vec<PayoutCoin> = ctx
+        .payout_coins
+        .iter()
+        .map(|coin| PayoutCoin { coin_id: coin.coin_id, symbol: &coin.symbol, rpc: &coin.rpc })
+        .collect();
+    let resolved = accounts::resolve(&ctx.backend, &candidates, &payout_coins, user, password).await?;
+    let Some((index, worker, aux_worker)) = resolved else {
         return Ok(None);
     };
     let symbol = candidates[index].symbol;

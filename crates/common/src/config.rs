@@ -77,6 +77,10 @@ pub struct Coin {
     pub rpc_user: String,
     #[serde(default)]
     pub rpc_password: String,
+    /// The coin's id at the price API, for the internal exchange. Without it the coin
+    /// cannot be exchanged.
+    #[serde(default)]
+    pub price_id: Option<String>,
     /// Symbol of the coin this one is merge-mined with: miners work on that coin, and
     /// every share is also tried as a proof of work for this one.
     #[serde(default)]

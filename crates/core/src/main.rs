@@ -1,6 +1,8 @@
 mod blocks;
+mod exchange;
 mod payouts;
 mod pplns;
+mod prices;
 mod stats;
 mod wallet;
 
@@ -15,6 +17,7 @@ use sqlx::PgPool;
 use tracing::{error, info, warn};
 
 const BLOCK_INTERVAL: Duration = Duration::from_secs(10);
+const PRICE_INTERVAL: Duration = Duration::from_secs(300);
 /// Arbitrary but fixed: identifies "the pool-core instance" among Postgres advisory locks.
 const SINGLETON_LOCK: i64 = 0x706f_6f6c_636f_7265;
 
@@ -41,9 +44,28 @@ async fn main() -> Result<()> {
         tokio::spawn(run_coin(db.clone(), coin_id, coin.clone(), cfg.accounting.clone()));
     }
 
+    tokio::spawn(run_exchange(db.clone(), cfg.coins.clone()));
+
     tokio::signal::ctrl_c().await?;
     info!("shutting down");
     Ok(())
+}
+
+/// Fetches prices and then lets miners swap what they earned in a coin that is not theirs.
+async fn run_exchange(db: PgPool, coins: Vec<Coin>) {
+    let http = reqwest::Client::new();
+    let mut prices = prices::Prices::default();
+    let mut tick = tokio::time::interval(PRICE_INTERVAL);
+    loop {
+        tick.tick().await;
+        // A failed fetch leaves the old prices, which the exchange stops using once they are stale.
+        if let Err(err) = prices.refresh(&db, &http, &coins).await {
+            warn!("refreshing prices failed: {err:#}");
+        }
+        if let Err(err) = exchange::run(&db).await {
+            error!("exchange round failed: {err:#}");
+        }
+    }
 }
 
 /// All accounting for one coin runs in this single loop, so its steps never overlap.

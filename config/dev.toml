@@ -53,6 +53,7 @@ payout_interval_secs = 30
 
 [[coins]]
 symbol = "LTC"
+price_id = "litecoin"
 name = "Litecoin"
 algo = "scrypt"
 template_rules = ["mweb", "segwit"]
@@ -65,6 +66,7 @@ min_payout = 0.1
 # Merge-mined: scrypt miners work on Litecoin, and every share is also tried on Dogecoin.
 [[coins]]
 symbol = "DOGE"
+price_id = "dogecoin"
 name = "Dogecoin"
 algo = "scrypt"
 aux_of = "LTC"
@@ -76,6 +78,7 @@ min_payout = 1.0
 
 [[coins]]
 symbol = "ROD"
+price_id = "spacexpanse"
 name = "SpaceXpanse"
 algo = "neoscrypt-xaya"
 chain = "xaya"
@@ -100,6 +103,7 @@ min_payout = 1.0
 
 [[coins]]
 symbol = "RVN"
+price_id = "ravencoin"
 name = "Ravencoin"
 algo = "kawpow"
 chain = "ravencoin"

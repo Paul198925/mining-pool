@@ -41,21 +41,45 @@ pub struct AuxCandidate<'a> {
     pub rpc: &'a RpcClient,
 }
 
+/// A coin this server knows a daemon for: miners can ask to be paid in it.
+pub struct PayoutCoin<'a> {
+    pub coin_id: i32,
+    pub symbol: &'a str,
+    pub rpc: &'a RpcClient,
+}
+
+/// Whether the coin's daemon takes `address` for one of its own. A daemon that is away
+/// counts as "no": it must not lock miners out of the other coins.
+async fn valid_on(rpc: &RpcClient, symbol: &str, address: &str) -> bool {
+    match rpc.call::<Value>("validateaddress", json!([address])).await {
+        Ok(info) => info["isvalid"] == true,
+        Err(err) => {
+            tracing::warn!(coin = %symbol, "cannot check the address: {err:#}");
+            false
+        }
+    }
+}
+
 /// Resolves a stratum login. The username is `<payout address>[.<worker name>]`; the password
-/// carries comma-separated options as in Yiimp: `c=<SYMBOL>` picks the coin, `m=solo` and
-/// `m=party.<name>` the reward mode.
+/// carries comma-separated options as in Yiimp: `c=<SYMBOL>` picks the coin to mine, `m=solo`
+/// and `m=party.<name>` the reward mode.
 ///
-/// Without `c=`, the coin is the first one on the port for which the address is valid.
+/// Without `c=`, the coin is the first one on the port for which the address is valid, or
+/// the port's only coin.
+///
+/// The address may be one of another coin of the pool: the miner is then paid in that coin,
+/// and what they mine is swapped by the internal exchange. `pay=<SYMBOL>` says so explicitly,
+/// for addresses that are valid on several chains.
 ///
 /// Where a second coin is merge-mined along, `<SYMBOL>=<address>` names the miner's address
-/// on that chain. Without it the second coin is credited to the same account, where it
-/// stays as a balance: it cannot be paid out to an address of another chain.
+/// on that chain. Without it the second coin is credited to the same account.
 ///
 /// Returns the index of the chosen candidate with the miner's ids for it and for its
-/// merge-mined coin, or `None` if no coin accepts the login.
+/// merge-mined coin, or `None` if the login is not acceptable.
 pub async fn resolve(
     backend: &Backend,
     candidates: &[Candidate<'_>],
+    payout_coins: &[PayoutCoin<'_>],
     user: &str,
     password: &str,
 ) -> Result<Option<(usize, WorkerIds, Option<WorkerIds>)>> {
@@ -65,26 +89,51 @@ pub async fn resolve(
     if !plausible || worker.len() > 64 {
         return Ok(None);
     }
-    let wanted = coin_option(password);
-    let mut chosen = None;
-    for (index, candidate) in candidates.iter().enumerate() {
-        if wanted.is_some_and(|symbol| !symbol.eq_ignore_ascii_case(candidate.symbol)) {
-            continue;
-        }
-        // One daemon being away must not lock miners out of the other coins on the port.
-        let info: Value = match candidate.rpc.call("validateaddress", json!([address])).await {
-            Ok(info) => info,
-            Err(err) => {
-                tracing::warn!(coin = %candidate.symbol, "cannot check the address: {err:#}");
-                continue;
+
+    // The coin to mine.
+    let mut valid_on_mined = false;
+    let index = match option(password, "c") {
+        Some(wanted) => candidates.iter().position(|candidate| candidate.symbol.eq_ignore_ascii_case(wanted)),
+        None => {
+            let mut found = None;
+            for (index, candidate) in candidates.iter().enumerate() {
+                if valid_on(candidate.rpc, candidate.symbol, address).await {
+                    valid_on_mined = true;
+                    found = Some(index);
+                    break;
+                }
             }
-        };
-        if info["isvalid"] == true {
-            chosen = Some((index, candidate.coin_id));
-            break;
+            found.or((candidates.len() == 1).then_some(0))
         }
-    }
-    let Some((index, coin_id)) = chosen else {
+    };
+    let Some(index) = index else {
+        return Ok(None);
+    };
+    let mined = &candidates[index];
+    let coin_id = mined.coin_id;
+
+    // The coin to be paid in: the one named, else the mined one if the address fits it,
+    // else whichever other coin of the pool the address belongs to.
+    let payout = match option(password, "pay") {
+        Some(wanted) => {
+            let Some(coin) = payout_coins.iter().find(|coin| coin.symbol.eq_ignore_ascii_case(wanted)) else {
+                return Ok(None);
+            };
+            valid_on(coin.rpc, coin.symbol, address).await.then_some((coin.coin_id, coin.symbol))
+        }
+        None if valid_on_mined || valid_on(mined.rpc, mined.symbol, address).await => Some((coin_id, mined.symbol)),
+        None => {
+            let mut found = None;
+            for coin in payout_coins.iter().filter(|coin| coin.symbol != mined.symbol) {
+                if valid_on(coin.rpc, coin.symbol, address).await {
+                    found = Some((coin.coin_id, coin.symbol));
+                    break;
+                }
+            }
+            found
+        }
+    };
+    let Some((payout_coin_id, payout_symbol)) = payout else {
         return Ok(None);
     };
 
@@ -96,10 +145,12 @@ pub async fn resolve(
     };
     let solo = mode == Mode::Solo;
     let ids = match backend {
-        Backend::Direct(db) => register(db, coin_id, address, worker, solo, coin_id, party_key.as_deref()).await?,
+        Backend::Direct(db) => {
+            register(db, payout_coin_id, address, worker, solo, coin_id, party_key.as_deref()).await?
+        }
         Backend::Api(api) => {
             let login = json!({
-                "symbol": candidates[index].symbol, "address": address, "worker": worker,
+                "symbol": mined.symbol, "payout_symbol": payout_symbol, "address": address, "worker": worker,
                 "solo": solo, "party_key_hash": party_key,
             });
             api.post("/api/node/authorize", &login).await?
@@ -122,7 +173,7 @@ pub async fn resolve(
             }
             (aux.coin_id, aux.symbol, own)
         }
-        None => (coin_id, candidates[index].symbol, address),
+        None => (payout_coin_id, payout_symbol, address),
     };
     let aux_ids = match backend {
         Backend::Direct(db) => {
@@ -186,20 +237,17 @@ async fn register(
     Ok(WorkerIds { account_id, worker_id, solo, party_id })
 }
 
-/// The symbol from a `c=<SYMBOL>` password option.
-fn coin_option(password: &str) -> Option<&str> {
+/// The value of a `<key>=<value>` password option, e.g. `c=<SYMBOL>`.
+fn option<'a>(password: &'a str, key: &str) -> Option<&'a str> {
     password.split(',').map(str::trim).find_map(|option| {
-        let (key, symbol) = option.split_once('=')?;
-        (key.eq_ignore_ascii_case("c") && !symbol.is_empty()).then_some(symbol)
+        let (name, value) = option.split_once('=')?;
+        (name.eq_ignore_ascii_case(key) && !value.is_empty()).then_some(value)
     })
 }
 
 /// The address from a `<SYMBOL>=<address>` password option.
 fn address_option<'a>(password: &'a str, symbol: &str) -> Option<&'a str> {
-    password.split(',').map(str::trim).find_map(|option| {
-        let (key, address) = option.split_once('=')?;
-        (key.eq_ignore_ascii_case(symbol) && !address.is_empty()).then_some(address)
-    })
+    option(password, symbol)
 }
 
 /// The first recognised `m=` option wins; anything else means ordinary pool mining.
@@ -232,10 +280,11 @@ mod tests {
 
     #[test]
     fn coin_is_picked_with_c() {
-        assert_eq!(coin_option("c=CHI"), Some("CHI"));
-        assert_eq!(coin_option("m=solo, C=rod"), Some("rod"));
-        assert_eq!(coin_option("x"), None);
-        assert_eq!(coin_option("c="), None);
+        assert_eq!(option("c=CHI", "c"), Some("CHI"));
+        assert_eq!(option("m=solo, C=rod", "c"), Some("rod"));
+        assert_eq!(option("x", "c"), None);
+        assert_eq!(option("c=", "c"), None);
+        assert_eq!(option("c=LTC,pay=DOGE", "pay"), Some("DOGE"));
     }
 
     #[test]
