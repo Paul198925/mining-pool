@@ -82,8 +82,9 @@ POOL_URL="$(cat pool-url)"
 AUTH="Authorization: Bearer $(cat token)"
 WG_IF=pool0
 curl -fsS -m 20 -X POST "$POOL_URL/api/node/heartbeat" -H "$AUTH" -H 'content-type: application/json' -d '{}' >/dev/null || true
-# In the background: collecting logs takes a few seconds and must not delay the peer list.
-[ -x ./report.sh ] && (./report.sh >/dev/null 2>&1 &)
+# Last, whichever way this script ends: collecting logs takes a few seconds and must not
+# delay the peer list. Not in the background: systemd stops what is left when we exit.
+trap '[ -x ./report.sh ] && ./report.sh >/dev/null 2>&1 || true' EXIT
 [ -f wg-private.key ] || exit 0
 curl -fsS -m 20 "$POOL_URL/api/node/wireguard" -H "$AUTH" -o wg.new
 [ -s wg.new ] || exit 0
