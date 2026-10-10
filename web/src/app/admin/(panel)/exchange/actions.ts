@@ -21,3 +21,22 @@ export async function saveExchange(_previous: SaveState, form: FormData): Promis
   revalidatePath("/admin/exchange");
   return { saved: true };
 }
+
+/**
+ * Sets a coin's price by hand, or with an empty field goes back to the price API.
+ * A price set by hand is used as it is until it is changed: the pool does not check it.
+ */
+export async function saveManualPrice(_previous: SaveState, form: FormData): Promise<SaveState> {
+  await requireAdmin();
+  const symbol = String(form.get("symbol") ?? "");
+  const text = String(form.get("price") ?? "").trim().replace(",", ".");
+  const price = text === "" ? null : Number(text);
+  if (price !== null && !(Number.isFinite(price) && price > 0 && price < 1e9)) {
+    return { error: "Enter a price above zero in US dollars, or leave the field empty." };
+  }
+  const { rowCount } = await db().query("UPDATE coins SET price_manual_usd = $2 WHERE symbol = $1", [symbol, price]);
+  if (rowCount === 0) return { error: "Unknown coin." };
+  if (price !== null) console.warn(`admin set the price of ${symbol} by hand to ${price} USD`);
+  revalidatePath("/admin/exchange");
+  return { saved: true };
+}

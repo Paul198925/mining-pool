@@ -8,6 +8,7 @@ import { requireAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { formatAge, formatAmount, shorten } from "@/lib/format";
 
+import { PriceRowForm } from "./price-row";
 import { SettingsForm } from "./settings-form";
 
 export const metadata: Metadata = { title: "Exchange" };
@@ -27,7 +28,8 @@ async function getExchange() {
   const [settings, prices, waiting, swaps] = await Promise.all([
     db().query("SELECT name, value FROM pool_settings WHERE name IN ('exchange_enabled', 'exchange_fee_percent')"),
     db().query(
-      `SELECT symbol, price_usd, price_at, COALESCE(price_at > now() - interval '20 minutes', FALSE) AS usable
+      `SELECT symbol, price_usd, price_at, price_manual_usd,
+              COALESCE(price_usd > 0 AND price_at > now() - interval '20 minutes', FALSE) AS usable
        FROM coins WHERE enabled ORDER BY symbol`,
     ),
     db().query(
@@ -53,7 +55,13 @@ async function getExchange() {
   return {
     enabled: setting("exchange_enabled") === "true",
     feePercent: Number(setting("exchange_fee_percent") ?? 1),
-    prices: prices.rows,
+    prices: prices.rows.map((r) => ({
+      symbol: r.symbol as string,
+      fetched: r.price_usd as number | null,
+      fetchedAt: r.price_at as Date | null,
+      fetchedUsable: r.usable as boolean,
+      manual: r.price_manual_usd as number | null,
+    })),
     waiting: waiting.rows,
     swaps: swaps.rows,
   };
@@ -81,25 +89,16 @@ async function Exchange() {
           <thead>
             <tr>
               <th>Coin</th>
-              <th className="right">US dollars</th>
+              <th className="right">From the API, US dollars</th>
               <th className="right">Fetched</th>
-              <th>State</th>
+              <th className="right">Set by hand, US dollars</th>
+              <th>In use</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {prices.map((price) => (
-              <tr key={price.symbol}>
-                <td>
-                  <b>{price.symbol}</b>
-                </td>
-                <td className="right">{price.price_usd === null ? "–" : Number(price.price_usd).toPrecision(6)}</td>
-                <td className="right">{price.price_at ? formatAge(price.price_at) : "–"}</td>
-                <td>
-                  <span className={`block ${price.usable ? "confirmed" : "orphaned"}`}>
-                    {price.usable ? "in use" : price.price_usd === null ? "no price, not exchanged" : "too old, paused"}
-                  </span>
-                </td>
-              </tr>
+              <PriceRowForm key={price.symbol} price={price} />
             ))}
           </tbody>
         </table>
@@ -107,6 +106,11 @@ async function Exchange() {
           <li>
             Prices come from a public price API. One older than 20 minutes is not used, and a price that jumps by
             more than 15 % has to repeat three times before it counts.
+          </li>
+          <li>
+            A price set by hand replaces the one from the API, also for a coin the API does not know. It is used
+            exactly as entered until you change it: nothing checks it and it does not follow the market, so a
+            stale one lets miners swap at the wrong rate. Empty the field and save to go back to the API.
           </li>
         </ul>
       </Box>

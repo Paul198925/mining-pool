@@ -14,8 +14,6 @@ use anyhow::{Context, Result};
 use sqlx::PgPool;
 use tracing::info;
 
-/// Prices older than this are not used: better no swap than one at a stale price.
-const MAX_PRICE_AGE_SECS: f64 = 20.0 * 60.0;
 /// A balance is swapped once it is worth this fraction of the target coin's minimum
 /// payout, so that dust does not turn into thousands of tiny bookings.
 const MIN_SWAP_FRACTION: i64 = 10;
@@ -141,10 +139,11 @@ pub async fn run(db: &PgPool) -> Result<()> {
         .context("exchange_fee_percent is not set to a number between 0 and 50")?;
 
     let mut tx = db.begin().await?;
-    // Usable prices and, per coin, what the pool may add from its own fee income: no more
+    // Usable prices (set by hand, or fetched and fresh: better no swap than one at a stale
+    // price) and, per coin, what the pool may add from its own fee income: no more
     // than that income, and no more than the wallet holds beyond what miners are owed.
     let coins: Vec<(i32, String, f64, Option<i64>, i64)> = sqlx::query_as(
-        "SELECT c.id, c.symbol, c.price_usd, c.min_payout,
+        "SELECT c.id, c.symbol, p.usd, c.min_payout,
                 GREATEST(0, LEAST(
                     COALESCE((SELECT SUM(amount) FROM ledger_entries
                               WHERE coin_id = c.id AND system_account = 'pool_fee'), 0),
@@ -154,10 +153,8 @@ pub async fn run(db: &PgPool) -> Result<()> {
                       - COALESCE((SELECT SUM(amount) FROM payouts
                                   WHERE coin_id = c.id AND status <> 'sent'), 0)
                 ))::BIGINT
-         FROM coins c
-         WHERE c.price_usd > 0 AND c.price_at > now() - make_interval(secs => $1)",
+         FROM coins c JOIN usable_prices p ON p.coin_id = c.id",
     )
-    .bind(MAX_PRICE_AGE_SECS)
     .fetch_all(&mut *tx)
     .await?;
     let prices: HashMap<i32, f64> = coins.iter().map(|coin| (coin.0, coin.2)).collect();

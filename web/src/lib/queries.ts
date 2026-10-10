@@ -100,8 +100,7 @@ export async function getCoins(): Promise<Coin[]> {
   const { rows } = await db().query(
     `SELECT c.symbol, c.name, c.algo, c.height, c.network_difficulty, c.network_hashrate, c.stratum_port,
             c.block_maturity, c.min_payout, c.pool_fee_percent, c.solo_fee_percent,
-            COALESCE(c.price_at > now() - interval '20 minutes', FALSE) AS exchangeable,
-            CASE WHEN c.price_at > now() - interval '20 minutes' THEN c.price_usd END AS price_usd,
+            (SELECT p.usd FROM usable_prices p WHERE p.coin_id = c.id) AS price_usd,
             COALESCE(live.difficulty, 0) * $1 / $2 AS hashrate,
             COALESCE(live.miners, 0) AS miners, COALESCE(live.workers, 0) AS workers,
             (SELECT count(*) FROM blocks b WHERE b.coin_id = c.id AND b.status <> 'orphaned') AS blocks_found,
@@ -123,7 +122,7 @@ export async function getCoins(): Promise<Coin[]> {
     networkDifficulty: r.network_difficulty,
     networkHashrate: r.network_hashrate,
     stratumPort: r.stratum_port,
-    exchangeable: r.exchangeable,
+    exchangeable: r.price_usd !== null,
     priceUsd: r.price_usd,
     blockMaturity: r.block_maturity,
     minPayout: r.min_payout,
@@ -209,7 +208,7 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
   await connection();
   const accounts = await db().query(
     `SELECT a.id, c.id AS coin_id, c.symbol,
-            CASE WHEN c.price_at > now() - interval '20 minutes' THEN c.price_usd END AS price_usd
+            (SELECT p.usd FROM usable_prices p WHERE p.coin_id = c.id) AS price_usd
      FROM accounts a JOIN coins c ON c.id = a.payout_coin_id
      WHERE a.payout_address = $1
      ORDER BY c.symbol`,
