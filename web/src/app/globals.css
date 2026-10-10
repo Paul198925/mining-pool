@@ -163,6 +163,37 @@ a:hover {
   font-family: monospace;
 }
 
+/* Admin area */
+.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid #e8e8e8;
+  border-radius: 5px;
+  background-color: #f6f6f6;
+}
+
+.alert,
+.notice {
+  margin: 0;
+  padding: 5px 8px;
+  border-radius: 3px;
+}
+
+.alert {
+  border: 1px solid #ebccd1;
+  background-color: #f2dede;
+  color: #a94442;
+}
+
+.notice {
+  border: 1px solid #d6e9c6;
+  background-color: #dff0d8;
+  color: #3c763d;
+}
+
 /* The stratum line generator: one label/field pair per row */
 .generator {
   display: grid;

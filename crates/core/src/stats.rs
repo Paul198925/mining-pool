@@ -37,3 +37,14 @@ pub async fn refresh_chain_stats(db: &PgPool, rpc: &RpcClient, coin_id: i32, coi
     .await?;
     Ok(())
 }
+
+/// Publishes the wallet's spendable balance for the admin area.
+pub async fn refresh_wallet_balance(db: &PgPool, rpc: &RpcClient, coin_id: i32) -> Result<()> {
+    let balance: f64 = rpc.call("getbalance", json!([])).await?;
+    sqlx::query("UPDATE coins SET wallet_balance = $2, wallet_checked_at = now() WHERE id = $1")
+        .bind(coin_id)
+        .bind((balance * 1e8).round() as i64)
+        .execute(db)
+        .await?;
+    Ok(())
+}

@@ -83,6 +83,12 @@ JSON-API für Miner und Dritt-Tools:
 | `/api/blocks?limit=50` | zuletzt gefundene Blöcke |
 | `/api/miners/<Adresse>` | Hashrate, Guthaben, Worker, Auszahlungen eines Miners |
 
+## Admin-Bereich
+
+Unter `/admin` liegt eine Übersicht für den Betreiber: Geldflüsse je Coin, Auszahlungen, Blöcke mit Aufteilung, Miner sowie Stratum-Server und Coin-Nodes. Sie zeigt nur an und löst nichts aus.
+
+Der Zugang hängt an der Umgebungsvariable `ADMIN_PASSWORD` der Web-App (mindestens 12 Zeichen). Ist sie nicht gesetzt, ist der Bereich abgeschaltet. Für die lokale Entwicklung steht sie in `web/.env.local`, das nicht eingecheckt wird.
+
 ## Betrieb auf mehreren Servern
 
 Der Pool besteht aus drei Diensten, die sich nur die Datenbank teilen:
@@ -106,6 +112,7 @@ Jeder Stratum-Server braucht eine eigene Nummer (`POOL_INSTANCE_ID`, 0 bis 255).
 | `POOL_RPC_PASSWORD_<SYMBOL>` | Stratum, Core | RPC-Passwort des Coin-Nodes |
 | `POOL_RPC_URL_<SYMBOL>` | Stratum, Core | optional, abweichende Adresse des Coin-Nodes |
 | `POOL_ADDRESS_<SYMBOL>` | Stratum | Adresse des Pool-Wallets für Block-Belohnungen |
+| `ADMIN_PASSWORD` | Web | Passwort für den Admin-Bereich |
 
 Die Uhren aller Server müssen per NTP synchron laufen, weil Shares und Blöcke über ihren Zeitstempel zugeordnet werden.
 
