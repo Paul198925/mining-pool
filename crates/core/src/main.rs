@@ -1,6 +1,7 @@
 mod blocks;
 mod payouts;
 mod pplns;
+mod stats;
 
 use std::time::{Duration, Instant};
 
@@ -10,7 +11,7 @@ use pool_common::{
     rpc::RpcClient,
 };
 use sqlx::PgPool;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const BLOCK_INTERVAL: Duration = Duration::from_secs(10);
 /// Arbitrary but fixed: identifies "the pool-core instance" among Postgres advisory locks.
@@ -48,10 +49,16 @@ async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) 
     let payout_interval = Duration::from_secs(accounting.payout_interval_secs);
     let mut last_payout = Instant::now();
     let mut tick = tokio::time::interval(BLOCK_INTERVAL);
+    if let Err(err) = stats::publish_settings(&db, coin_id, &coin, &accounting).await {
+        error!(coin = %coin.symbol, "publishing settings failed: {err:#}");
+    }
     info!(coin = %coin.symbol, "accounting started");
 
     loop {
         tick.tick().await;
+        if let Err(err) = stats::refresh_chain_stats(&db, &rpc, coin_id).await {
+            warn!(coin = %coin.symbol, "refreshing chain stats failed: {err:#}");
+        }
         if let Err(err) = blocks::credit_new_blocks(&db, coin_id, &accounting).await {
             error!(coin = %coin.symbol, "crediting blocks failed: {err:#}");
         }

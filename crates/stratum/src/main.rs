@@ -68,6 +68,9 @@ async fn main() -> Result<()> {
     let db = pool_common::db::connect(&cfg).await?;
     let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
     let recorder = Recorder::spawn(db.clone(), coin_id);
+    // Published so the website can tell miners where to connect.
+    let port: Option<i32> = cfg.stratum.listen.rsplit(':').next().and_then(|port| port.parse().ok());
+    sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1").bind(coin_id).bind(port).execute(&db).await?;
     let rpc = RpcClient::new(coin)?;
     let payout_script = payout_script(&rpc, coin).await?;
     let pool = Arc::new(Pool::new(
