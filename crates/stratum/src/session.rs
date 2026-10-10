@@ -6,8 +6,10 @@ use tracing::debug;
 
 use crate::{
     accounts::WorkerIds,
+    chain::Chain,
     job::{FoundBlock, Job, ShareError},
     pool::{Pool, Port},
+    util::target_for_difficulty,
     vardiff::VarDiff,
 };
 
@@ -99,14 +101,16 @@ impl Session {
         match req.method.as_str() {
             "mining.subscribe" => {
                 let extranonce1 = hex::encode(&self.extranonce1);
-                out.lines.push(ok(
-                    req.id,
-                    json!([
+                let result = match self.port.chain {
+                    // KawPoW miners take a session id and the start of their nonce range.
+                    Chain::Ravencoin => json!([null, extranonce1]),
+                    Chain::Bitcoin | Chain::Xaya => json!([
                         [["mining.set_difficulty", extranonce1], ["mining.notify", extranonce1]],
                         extranonce1,
                         self.port.chain.extranonce2_size()
                     ]),
-                ));
+                };
+                out.lines.push(ok(req.id, result));
                 self.subscribed = true;
                 out.lines.extend(self.start_work(current));
             }
@@ -118,7 +122,10 @@ impl Session {
                 }
                 _ => out.lines.push(error(req.id, ERR_UNAUTHORIZED, "Unauthorized worker")),
             },
-            "mining.extranonce.subscribe" => out.lines.push(ok(req.id, json!(true))),
+            // Hashrate reports are for the miner's own display.
+            "mining.extranonce.subscribe" | "eth_submitHashrate" | "mining.hashrate" => {
+                out.lines.push(ok(req.id, json!(true)));
+            }
             "mining.submit" if !self.subscribed => {
                 out.lines.push(error(req.id, ERR_NOT_SUBSCRIBED, "Not subscribed"));
             }
@@ -149,7 +156,7 @@ impl Session {
         if !self.subscribed || self.login.is_none() {
             return Vec::new();
         }
-        let mut lines = vec![set_difficulty(self.vardiff.diff())];
+        let mut lines = vec![self.difficulty_line(self.vardiff.diff())];
         lines.extend(current.and_then(|job| self.on_job(job)));
         lines
     }
@@ -163,7 +170,7 @@ impl Session {
             self.job_diffs.clear();
         }
         self.job_diffs.insert(job.id.clone(), self.vardiff.diff());
-        Some(job.notify.clone())
+        Some(job.notify(self.vardiff.diff()))
     }
 
     /// Periodic check so a miner that finds no shares at all still gets an easier difficulty.
@@ -175,42 +182,68 @@ impl Session {
         let Some(diff) = self.vardiff.retarget(now) else {
             return Vec::new();
         };
-        let mut lines = vec![set_difficulty(diff)];
+        let mut lines = vec![self.difficulty_line(diff)];
         // Miners apply a new difficulty from the next notify on, so repeat the current job.
         // Shares for it may still arrive at the old difficulty; accept whichever is lower.
         if let Some(job) = current {
             let entry = self.job_diffs.entry(job.id.clone()).or_insert(diff);
             *entry = entry.min(diff);
-            lines.push(job.notify.clone());
+            lines.push(job.notify(diff));
         }
         lines
+    }
+
+    fn difficulty_line(&self, diff: f64) -> String {
+        let (method, param) = match self.port.chain {
+            Chain::Ravencoin => ("mining.set_target", json!(hex::encode(target_for_difficulty(diff)))),
+            Chain::Bitcoin | Chain::Xaya => ("mining.set_difficulty", json!(diff)),
+        };
+        json!({ "id": null, "method": method, "params": [param] }).to_string()
     }
 
     fn submit(&mut self, id: Value, params: &[Value]) -> (String, Option<AcceptedShare>) {
         let Some(Login { worker, pool }) = &self.login else {
             return (error(id, ERR_UNAUTHORIZED, "Unauthorized worker"), None);
         };
-        // params: [worker, job id, extranonce2, ntime, nonce]
-        let field = |i: usize| params.get(i).and_then(Value::as_str);
-        let parsed = (|| {
-            let extranonce2 = hex::decode(field(2)?).ok()?;
-            let ntime = u32::from_str_radix(field(3)?, 16).ok()?;
-            let nonce = u32::from_str_radix(field(4)?, 16).ok()?;
-            Some((field(1)?, extranonce2, ntime, nonce))
-        })();
-        let Some((job_id, extranonce2, ntime, nonce)) = parsed else {
+        // Some miners prefix hex with "0x".
+        let field = |i: usize| params.get(i).and_then(Value::as_str).map(|hex| hex.trim_start_matches("0x"));
+        let Some(job_id) = params.get(1).and_then(Value::as_str) else {
             return (error(id, ERR_OTHER, "Malformed submit"), None);
         };
         let (Some(&diff), Some(job)) = (self.job_diffs.get(job_id), pool.job(job_id)) else {
             return (error(id, ERR_JOB_NOT_FOUND, "Job not found"), None);
         };
+        let hash32 = |hex_str: &str| -> Option<[u8; 32]> { hex::decode(hex_str).ok()?.try_into().ok() };
+        // What still counts as meeting the difficulty. A target sent as hex is a rounded number.
+        let mut floor = diff;
+        let checked = match self.port.chain {
+            // params: [worker, job id, nonce, header hash, mix hash]
+            Chain::Ravencoin => (|| {
+                let nonce = field(2).filter(|hex| hex.len() == 16)?;
+                let nonce = u64::from_str_radix(nonce, 16).ok()?;
+                floor = diff * (1.0 - 1e-6);
+                Some(job.check_kawpow(&self.extranonce1, nonce, &hash32(field(3)?)?, &hash32(field(4)?)?, floor))
+            })(),
+            // params: [worker, job id, extranonce2, ntime, nonce]
+            Chain::Bitcoin | Chain::Xaya => (|| {
+                let extranonce2 = hex::decode(field(2)?).ok()?;
+                let ntime = u32::from_str_radix(field(3)?, 16).ok()?;
+                let nonce = u32::from_str_radix(field(4)?, 16).ok()?;
+                Some(job.check_share(self.port.algo, &self.extranonce1, &extranonce2, ntime, nonce))
+            })(),
+        };
+        let Some(checked) = checked else {
+            return (error(id, ERR_OTHER, "Malformed submit"), None);
+        };
 
-        match job.check_share(self.port.algo, &self.extranonce1, &extranonce2, ntime, nonce) {
+        match checked {
             Err(ShareError::Malformed) => (error(id, ERR_OTHER, "Malformed submit"), None),
             Err(ShareError::BadNtime) => (error(id, ERR_OTHER, "Invalid ntime"), None),
             Err(ShareError::Duplicate) => (error(id, ERR_DUPLICATE, "Duplicate share"), None),
+            Err(ShareError::NonceOutOfRange) => (error(id, ERR_OTHER, "Nonce out of range"), None),
+            Err(ShareError::BadMixHash) => (error(id, ERR_OTHER, "Invalid mix hash"), None),
             // A block is a block even if vardiff has pushed the miner above network difficulty.
-            Ok(share) if share.block.is_none() && share.difficulty < diff => {
+            Ok(share) if share.block.is_none() && share.difficulty < floor => {
                 (error(id, ERR_LOW_DIFFICULTY, "Low difficulty share"), None)
             }
             Ok(share) => {
@@ -230,10 +263,6 @@ fn ok(id: Value, result: Value) -> String {
 
 fn error(id: Value, code: i64, message: &str) -> String {
     json!({ "id": id, "result": null, "error": [code, message, null] }).to_string()
-}
-
-fn set_difficulty(diff: f64) -> String {
-    json!({ "id": null, "method": "mining.set_difficulty", "params": [diff] }).to_string()
 }
 
 #[cfg(test)]
@@ -273,6 +302,36 @@ mod tests {
 
     fn methods(lines: &[String]) -> Vec<Value> {
         lines.iter().map(|line| parse(line)["method"].clone()).collect()
+    }
+
+    #[test]
+    fn kawpow_miners_get_a_target_and_submit_nonce_and_mix_hash() {
+        use crate::job::tests::solve_kawpow;
+        // Low enough that a handful of hashes finds a share.
+        let vardiff = VarDiffConfig { start: 1e-8, min: 1e-9, max: 1e12, share_target_secs: 15.0 };
+        let mut s = Session::new(Arc::new(Port::new(Algo::Kawpow, Chain::Ravencoin, vardiff, 5)), Instant::now());
+        let pool = Arc::new(Pool::default());
+        let job = Arc::new(Job::new("a".into(), Chain::Ravencoin, 5, &easy_template(1), &[0x51], true).unwrap());
+        pool.add_job(job.clone());
+
+        let subscribed = parse(&s.handle_line(SUBSCRIBE, None, Instant::now()).lines[0]);
+        assert_eq!(subscribed["result"], json!([null, "0001"]), "no session id, then the nonce prefix");
+        let lines = authorize(&mut s, &pool, Some(&job));
+        assert_eq!(methods(&lines[1..]), [json!("mining.set_target"), json!("mining.notify")]);
+        let target = parse(&lines[1])["params"][0].clone();
+        assert_eq!(target.as_str().unwrap().len(), 64);
+        assert_eq!(parse(&lines[2])["params"][3], target, "the job repeats the miner's target");
+
+        let (nonce, header_hash, mix) = solve_kawpow(&job, [0, 1], 1e-8);
+        let submit = |nonce: u64, mix: &[u8; 32]| {
+            let params = json!(["addr.rig1", "a", format!("0x{nonce:016x}"), format!("0x{}", hex::encode(header_hash)), format!("0x{}", hex::encode(mix))]);
+            json!({ "id": 9, "method": "mining.submit", "params": params }).to_string()
+        };
+        let out = s.handle_line(&submit(nonce, &mix), Some(&job), Instant::now());
+        assert_eq!(parse(&out.lines[0])["result"], true);
+        assert_eq!(out.share.expect("accepted").difficulty, 1e-8);
+        let forged = s.handle_line(&submit(nonce + 1, &mix), Some(&job), Instant::now());
+        assert!(forged.share.is_none() && parse(&forged.lines[0])["error"][0] != Value::Null);
     }
 
     #[test]

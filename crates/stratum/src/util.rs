@@ -64,9 +64,42 @@ pub fn hash_difficulty(hash_le: &[u8; 32]) -> f64 {
     diff1 / value
 }
 
+/// The largest hash, as a big-endian number, that still has `difficulty`. For miners
+/// that are told a target instead of a difficulty.
+pub fn target_for_difficulty(difficulty: f64) -> [u8; 32] {
+    // target = 65535 * 2^208 / difficulty, written as mantissa * 2^shift with a 53-bit mantissa.
+    let quotient = 65535.0 / difficulty;
+    let exponent = quotient.log2().floor() as i32;
+    let mantissa = (quotient / 2f64.powi(exponent - 52)) as u64;
+    let shift = 208 + exponent - 52;
+    if shift + 53 > 256 || !quotient.is_finite() {
+        return [0xff; 32];
+    }
+    let mut target = [0u8; 32];
+    for bit in 0..64 {
+        let position = shift + bit;
+        if mantissa >> bit & 1 == 1 && position >= 0 {
+            target[31 - (position / 8) as usize] |= 1 << (position % 8);
+        }
+    }
+    target
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn targets_round_trip_through_difficulty() {
+        for difficulty in [1.0, 0.001, 0.5, 3.7, 8192.0, 1e9] {
+            let mut target = target_for_difficulty(difficulty);
+            target.reverse();
+            let back = hash_difficulty(&target);
+            assert!((back / difficulty - 1.0).abs() < 1e-9, "{difficulty} came back as {back}");
+        }
+        assert_eq!(hex::encode(target_for_difficulty(1.0)), format!("00000000ffff{}", "0".repeat(52)));
+        assert_eq!(target_for_difficulty(1e-80), [0xff; 32]);
+    }
 
     fn script_number(n: u64) -> Vec<u8> {
         let mut out = Vec::new();

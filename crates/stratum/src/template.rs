@@ -12,6 +12,7 @@ use tracing::{info, warn};
 use crate::{
     chain::Chain,
     job::{BlockTemplate, Job},
+    kawpow::{self, Epoch},
     pool::Pool,
 };
 
@@ -95,6 +96,19 @@ pub async fn run(
             continue;
         }
 
+        if chain == Chain::Ravencoin {
+            // Seconds of work the first time an epoch is seen; `Job::new` then finds it ready.
+            let epoch = Epoch::of_height(template.height);
+            let built = tokio::task::spawn_blocking(move || kawpow::EPOCHS.get(epoch).map(drop)).await;
+            if let Ok(Err(err)) = built {
+                warn!("cannot prepare KawPoW epoch {epoch}: {err:#}");
+                continue;
+            }
+            // Have the next epoch ready before its first block needs it.
+            if template.height % kawpow::EPOCH_LENGTH >= kawpow::EPOCH_LENGTH - 30 {
+                tokio::task::spawn_blocking(move || kawpow::EPOCHS.get(epoch + 1).map(drop));
+            }
+        }
         match Job::new(format!("{next_id:x}"), chain, instance_id, &template, &payout_script, clean) {
             Ok(job) => {
                 next_id += 1;

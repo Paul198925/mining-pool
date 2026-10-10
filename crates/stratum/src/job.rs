@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
@@ -7,7 +10,10 @@ use serde_json::json;
 use crate::{
     algo::Algo,
     chain::Chain,
-    util::{hash_difficulty, hash_from_display_hex, hex32, push_script_number, sha256d, write_varint},
+    kawpow::{self, Epoch},
+    util::{
+        hash_difficulty, hash_from_display_hex, hex32, push_script_number, sha256d, target_for_difficulty, write_varint,
+    },
 };
 
 /// Nodes reject blocks dated more than two hours ahead.
@@ -49,6 +55,10 @@ pub enum ShareError {
     Malformed,
     BadNtime,
     Duplicate,
+    /// The nonce is outside the range this connection was given.
+    NonceOutOfRange,
+    /// The mix hash is not the one the proof of work produces.
+    BadMixHash,
 }
 
 pub struct Share {
@@ -73,8 +83,8 @@ pub struct Job {
     /// Miners must drop older work when this is set (new chain tip).
     pub clean: bool,
     reward: u64,
-    /// The `mining.notify` line; identical for every miner because the extranonce is sent separately.
-    pub notify: String,
+    /// The `mining.notify` line where it is the same for every miner.
+    fixed_notify: String,
     curtime: u32,
     mintime: u32,
     /// Network target, big-endian.
@@ -101,6 +111,16 @@ enum Work {
         /// Compact target of the proof of work. Lives in the PowData, not in the block header.
         pow_bits: u32,
         fake_version: [u8; 4],
+    },
+    Ravencoin {
+        /// Version, previous block, merkle root, time, bits and height: the part of the
+        /// header that the header hash covers.
+        header: [u8; 80],
+        /// Double SHA-256 of `header`, in the byte order it is written in hex.
+        header_hash: [u8; 32],
+        coinbase: Vec<u8>,
+        nbits: u32,
+        epoch: Arc<Epoch>,
     },
 }
 
@@ -135,7 +155,8 @@ impl Job {
         let (work, params) = match chain {
             Chain::Bitcoin => {
                 let extranonce_len = chain.extranonce1_size() + chain.extranonce2_size();
-                let (coinb1, coinb2) = build_coinbase(template, payout_script, commitment.as_deref(), extranonce_len);
+                let (coinb1, coinb2) =
+                    build_coinbase(template, payout_script, commitment.as_deref(), extranonce_len, COINBASE_TAG);
                 let params = json!([
                     id,
                     stratum_prev_hash(&prev_hash),
@@ -151,7 +172,7 @@ impl Job {
             }
             Chain::Xaya => {
                 // Nothing in the coinbase varies, so the block header is fixed up to its nonce.
-                let (coinb1, coinb2) = build_coinbase(template, payout_script, commitment.as_deref(), 0);
+                let (coinb1, coinb2) = build_coinbase(template, payout_script, commitment.as_deref(), 0, COINBASE_TAG);
                 let coinbase = [coinb1, coinb2].concat();
                 let root = fold_branches(sha256d(&coinbase), &branches);
                 let mut header_prefix = Vec::with_capacity(76);
@@ -178,10 +199,32 @@ impl Job {
                 ]);
                 (Work::Xaya { header_prefix, coinbase, pow_bits: nbits, fake_version }, params)
             }
+            Chain::Ravencoin => {
+                // Miners never see the coinbase, so the instance id goes into it here: servers
+                // then hand out different header hashes and cannot collide on a nonce.
+                let tag = [COINBASE_TAG, &[instance_id]].concat();
+                let (coinb1, coinb2) = build_coinbase(template, payout_script, commitment.as_deref(), 0, &tag);
+                let coinbase = [coinb1, coinb2].concat();
+                let root = fold_branches(sha256d(&coinbase), &branches);
+                let height = u32::try_from(template.height).context("template height")?;
+                let mut header = [0u8; 80];
+                header[0..4].copy_from_slice(&template.version.to_le_bytes());
+                header[4..36].copy_from_slice(&prev_hash);
+                header[36..68].copy_from_slice(&root);
+                header[68..72].copy_from_slice(&template.curtime.to_le_bytes());
+                header[72..76].copy_from_slice(&nbits.to_le_bytes());
+                header[76..80].copy_from_slice(&height.to_le_bytes());
+                let mut header_hash = sha256d(&header);
+                header_hash.reverse();
+                // Cached; the template poller builds it ahead of time because that is slow.
+                let epoch = kawpow::EPOCHS.get(Epoch::of_height(template.height))?;
+                // This dialect's notify carries each miner's own target, see `notify`.
+                (Work::Ravencoin { header, header_hash, coinbase, nbits, epoch }, json!([]))
+            }
         };
 
         Ok(Self {
-            notify: json!({ "id": null, "method": "mining.notify", "params": params }).to_string(),
+            fixed_notify: json!({ "id": null, "method": "mining.notify", "params": params }).to_string(),
             id,
             height: template.height,
             clean,
@@ -194,6 +237,85 @@ impl Job {
             work,
             seen: Mutex::new(HashSet::new()),
         })
+    }
+
+    /// The `mining.notify` line for a miner working at `difficulty`.
+    pub fn notify(&self, difficulty: f64) -> String {
+        let Work::Ravencoin { header_hash, nbits, epoch, .. } = &self.work else {
+            // Everywhere else the difficulty travels in its own message.
+            return self.fixed_notify.clone();
+        };
+        let params = json!([
+            self.id,
+            hex::encode(header_hash),
+            hex::encode(Epoch::seed(epoch.number)),
+            hex::encode(target_for_difficulty(difficulty)),
+            self.clean,
+            self.height,
+            format!("{nbits:08x}"),
+        ]);
+        json!({ "id": null, "method": "mining.notify", "params": params }).to_string()
+    }
+
+    /// Scores a KawPoW solution: a nonce and the mix hash the miner got for it.
+    ///
+    /// The full check costs milliseconds, so a share whose claimed proof would be worth
+    /// less than `floor` anyway is returned as it is claimed, without it.
+    pub fn check_kawpow(
+        &self,
+        extranonce1: &[u8],
+        nonce: u64,
+        header_hash: &[u8; 32],
+        mix_hash: &[u8; 32],
+        floor: f64,
+    ) -> Result<Share, ShareError> {
+        let Work::Ravencoin { header, header_hash: expected, coinbase, epoch, .. } = &self.work else {
+            return Err(ShareError::Malformed);
+        };
+        if header_hash != expected {
+            return Err(ShareError::Malformed);
+        }
+        let nonce_be = nonce.to_be_bytes();
+        if !nonce_be.starts_with(extranonce1) {
+            return Err(ShareError::NonceOutOfRange);
+        }
+        if !self.seen.lock().unwrap().insert((nonce_be.to_vec(), 0, 0)) {
+            return Err(ShareError::Duplicate);
+        }
+        let difficulty_of = |final_hash: &[u8; 32]| {
+            let mut le = *final_hash;
+            le.reverse();
+            hash_difficulty(&le)
+        };
+
+        let claimed = kawpow::final_hash(self.height, expected, mix_hash, nonce);
+        if difficulty_of(&claimed) < floor && claimed > self.target {
+            return Ok(Share { difficulty: difficulty_of(&claimed), block: None });
+        }
+        let pow = epoch.hash(self.height, expected, nonce);
+        if pow.mix_hash != *mix_hash {
+            return Err(ShareError::BadMixHash);
+        }
+
+        let block = (pow.final_hash <= self.target).then(|| {
+            let mut raw = header.to_vec();
+            raw.extend_from_slice(&nonce.to_le_bytes());
+            raw.extend(mix_hash.iter().rev());
+            write_varint(&mut raw, 1 + self.tx_data.len() as u64);
+            raw.extend_from_slice(coinbase);
+            self.tx_data.iter().for_each(|tx| raw.extend_from_slice(tx));
+            let mut target_le = self.target;
+            target_le.reverse();
+            FoundBlock {
+                // Ravencoin identifies a block by its proof-of-work hash.
+                hash: hex::encode(pow.final_hash),
+                height: self.height,
+                reward: self.reward,
+                network_difficulty: hash_difficulty(&target_le),
+                hex: hex::encode(raw),
+            }
+        });
+        Ok(Share { difficulty: difficulty_of(&pow.final_hash), block })
     }
 
     /// Rebuilds what a miner claims to have hashed and scores it.
@@ -252,6 +374,7 @@ impl Job {
                 block_start.extend_from_slice(&fake);
                 (algo.hash(&input), header_hash, block_start, coinbase.clone())
             }
+            Work::Ravencoin { .. } => return Err(ShareError::Malformed),
         };
 
         let mut pow_be = pow;
@@ -285,14 +408,15 @@ fn build_coinbase(
     payout_script: &[u8],
     witness_commitment: Option<&[u8]>,
     extranonce_len: usize,
+    tag: &[u8],
 ) -> (Vec<u8>, Vec<u8>) {
     let mut script_head = Vec::new();
     push_script_number(&mut script_head, template.height);
     if extranonce_len > 0 {
         script_head.push(extranonce_len as u8);
     }
-    let mut script_tail = vec![COINBASE_TAG.len() as u8];
-    script_tail.extend_from_slice(COINBASE_TAG);
+    let mut script_tail = vec![tag.len() as u8];
+    script_tail.extend_from_slice(tag);
     let script_len = script_head.len() + extranonce_len + script_tail.len();
 
     let mut coinb1 = Vec::new();
@@ -399,7 +523,7 @@ pub mod tests {
 
     #[test]
     fn coinbase_script_length_covers_the_extranonce() {
-        let (coinb1, coinb2) = build_coinbase(&easy_template(0), &[0xac], None, 8);
+        let (coinb1, coinb2) = build_coinbase(&easy_template(0), &[0xac], None, 8, COINBASE_TAG);
         let script_len = coinb1[41] as usize;
         let script_bytes = (coinb1.len() - 42) + 8 + 1 + COINBASE_TAG.len();
         assert_eq!(script_len, script_bytes);
@@ -409,8 +533,8 @@ pub mod tests {
     #[test]
     fn witness_commitment_becomes_a_second_output() {
         let commitment = [0x6a, 0x24, 0xaa, 0x21];
-        let (_, plain) = build_coinbase(&easy_template(0), &[0xac], None, 0);
-        let (_, with) = build_coinbase(&easy_template(0), &[0xac], Some(&commitment), 0);
+        let (_, plain) = build_coinbase(&easy_template(0), &[0xac], None, 0, COINBASE_TAG);
+        let (_, with) = build_coinbase(&easy_template(0), &[0xac], Some(&commitment), 0, COINBASE_TAG);
         let outputs_at = 1 + COINBASE_TAG.len() + 4;
         assert_eq!((plain[outputs_at], with[outputs_at]), (1, 2));
         assert_eq!(with.len(), plain.len() + 8 + 1 + commitment.len());
@@ -471,7 +595,7 @@ pub mod tests {
     #[test]
     fn xaya_notify_presents_the_block_header_as_the_coinbase() {
         let job = Job::new("1".into(), Chain::Xaya, 9, &easy_template(0), &[0x51], true).unwrap();
-        let notify: serde_json::Value = serde_json::from_str(&job.notify).unwrap();
+        let notify: serde_json::Value = serde_json::from_str(&job.notify(1.0)).unwrap();
         let params = &notify["params"];
         assert_eq!(params[1], "00".repeat(32));
         assert_eq!(params[2].as_str().unwrap().len(), 76 * 2);
@@ -479,6 +603,64 @@ pub mod tests {
         assert_eq!(params[4], json!([]));
         assert_eq!(params[5], "20000009");
         assert_eq!(params[6], "207fffff");
+    }
+
+    /// Tries nonces in the connection's range until one makes a share of at least `difficulty`.
+    pub fn solve_kawpow(job: &Job, extranonce1: [u8; 2], difficulty: f64) -> (u64, [u8; 32], [u8; 32]) {
+        let Work::Ravencoin { header_hash, epoch, .. } = &job.work else { panic!("ravencoin job") };
+        let first = u64::from(u16::from_be_bytes(extranonce1)) << 48;
+        (first..)
+            .find_map(|nonce| {
+                let pow = epoch.hash(job.height, header_hash, nonce);
+                let mut le = pow.final_hash;
+                le.reverse();
+                (hash_difficulty(&le) >= difficulty).then_some((nonce, *header_hash, pow.mix_hash))
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn ravencoin_block_is_header_nonce_and_mix_hash() {
+        let template = easy_template(2);
+        let job = Job::new("1".into(), Chain::Ravencoin, 9, &template, &[0x51], true).unwrap();
+        let (nonce, header_hash, mix) = solve_kawpow(&job, [0xab, 0xcd], 0.0);
+        let share = job.check_kawpow(&[0xab, 0xcd], nonce, &header_hash, &mix, 0.0).unwrap();
+        let block = share.block.expect("easy target");
+        let raw = hex::decode(&block.hex).unwrap();
+
+        let Work::Ravencoin { coinbase, .. } = &job.work else { panic!("ravencoin job") };
+        assert!(coinbase.windows(7).any(|w| w == b"/pool/\x09"), "the instance id is part of the coinbase");
+        let mut txids = vec![sha256d(coinbase)];
+        txids.extend(template_txids(&template));
+        assert_eq!(&raw[36..68], &naive_merkle_root(txids));
+        assert_eq!(&raw[76..80], &102u32.to_le_bytes(), "height follows the bits");
+        let mut expected_hash = sha256d(&raw[0..80]);
+        expected_hash.reverse();
+        assert_eq!(header_hash, expected_hash);
+        assert_eq!(&raw[80..88], &nonce.to_le_bytes());
+        assert_eq!(raw[88..120].iter().rev().copied().collect::<Vec<u8>>(), mix);
+        assert_eq!(raw[120], 3, "transaction count");
+        assert_eq!(raw.len(), 121 + coinbase.len() + 2 * 60);
+        assert_eq!(block.hash.len(), 64);
+
+        let notify: serde_json::Value = serde_json::from_str(&job.notify(1.0)).unwrap();
+        let params = &notify["params"];
+        assert_eq!(params[1], hex::encode(header_hash));
+        assert_eq!(params[2], "00".repeat(32), "seed of epoch 0");
+        assert_eq!(params[3], format!("00000000ffff{}", "0".repeat(52)));
+        assert_eq!((&params[4], &params[5], &params[6]), (&json!(true), &json!(102), &json!("207fffff")));
+    }
+
+    #[test]
+    fn ravencoin_shares_must_be_real_and_in_range() {
+        let job = Job::new("1".into(), Chain::Ravencoin, 9, &easy_template(0), &[0x51], true).unwrap();
+        let en1 = [0xab, 0xcd];
+        let (nonce, header_hash, mix) = solve_kawpow(&job, en1, 0.0);
+        assert_eq!(job.check_kawpow(&[0xab, 0xce], nonce, &header_hash, &mix, 0.0).err(), Some(ShareError::NonceOutOfRange));
+        assert_eq!(job.check_kawpow(&en1, nonce, &[7; 32], &mix, 0.0).err(), Some(ShareError::Malformed));
+        assert_eq!(job.check_kawpow(&en1, nonce + 1, &header_hash, &[7; 32], 0.0).err(), Some(ShareError::BadMixHash));
+        assert!(job.check_kawpow(&en1, nonce, &header_hash, &mix, 0.0).is_ok());
+        assert_eq!(job.check_kawpow(&en1, nonce, &header_hash, &mix, 0.0).err(), Some(ShareError::Duplicate));
     }
 
     #[test]

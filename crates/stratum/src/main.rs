@@ -4,6 +4,7 @@ mod backend;
 mod chain;
 mod instance;
 mod job;
+mod kawpow;
 mod pool;
 mod recorder;
 mod session;
@@ -143,8 +144,13 @@ async fn start_listener(
         coins.iter().all(|coin| coin.chain == coins[0].chain),
         "coins sharing a port must have the same chain type"
     );
+    let algo = Algo::from_name(&settings.algo)?;
+    ensure!(
+        (algo == Algo::Kawpow) == (chain == Chain::Ravencoin),
+        "KawPoW and the ravencoin chain type only work together"
+    );
     let port = Arc::new(Port::new(
-        Algo::from_name(&settings.algo)?,
+        algo,
         chain,
         VarDiffConfig {
             start: settings.start_difficulty,

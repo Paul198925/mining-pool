@@ -11,7 +11,7 @@ RUN cargo build --release --locked -p pool-stratum -p pool-core
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --uid 1000 pool
 WORKDIR /app

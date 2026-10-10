@@ -7,6 +7,8 @@ pub enum Algo {
     Neoscrypt,
     /// Rincoin: BLAKE3, then Argon2d, then SHA3-256.
     RinHash,
+    /// Ravencoin's ProgPoW variant. It hashes more than a header, see [`crate::kawpow`].
+    Kawpow,
 }
 
 unsafe extern "C" {
@@ -24,6 +26,7 @@ impl Algo {
             // "neoscrypt-xaya" is what miners call Neoscrypt over Xaya's block layout.
             "neoscrypt" | "neoscrypt-xaya" => Ok(Self::Neoscrypt),
             "rinhash" => Ok(Self::RinHash),
+            "kawpow" => Ok(Self::Kawpow),
             other => bail!("unsupported algo: {other}"),
         }
     }
@@ -53,6 +56,7 @@ impl Algo {
                     .expect("valid argon2 input lengths");
                 Sha3_256::digest(stretched).into()
             }
+            Self::Kawpow => unreachable!("KawPoW is checked by Job::check_kawpow"),
         }
     }
 
@@ -61,7 +65,7 @@ impl Algo {
     pub fn block_id_is_pow_hash(self) -> bool {
         match self {
             Self::Scrypt | Self::Neoscrypt => false,
-            Self::RinHash => true,
+            Self::RinHash | Self::Kawpow => true,
         }
     }
 
@@ -69,7 +73,7 @@ impl Algo {
     pub fn diff_multiplier(self) -> f64 {
         match self {
             Self::Scrypt | Self::Neoscrypt => 65536.0,
-            Self::RinHash => 1.0,
+            Self::RinHash | Self::Kawpow => 1.0,
         }
     }
 }
