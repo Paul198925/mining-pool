@@ -15,6 +15,11 @@ min_difficulty = 0.001
 max_difficulty = 1000000.0
 share_target_secs = 15.0
 
+[accounting]
+pplns_factor = 2.0
+pool_fee_percent = 1.0
+payout_interval_secs = 30
+
 [[coins]]
 symbol = "DOGE"
 name = "Dogecoin"
@@ -22,3 +27,5 @@ algo = "scrypt"
 rpc_url = "http://127.0.0.1:18332"
 rpc_user = "pool"
 rpc_password = "pooldev"
+block_maturity = 60
+min_payout = 1.0

@@ -45,11 +45,17 @@ cargo run -p pool-stratum
 npm --prefix web run dev
 ```
 
-Test-Miner (cpuminer) gegen den laufenden Stratum-Server starten, beenden mit Strg+C:
+Test-Miner (cpuminer) gegen den laufenden Stratum-Server starten, beenden mit Strg+C. Der Benutzername ist die Auszahlungsadresse, also zuerst eine Regtest-Adresse holen:
 
 ```bash
-docker compose --profile miner run --rm miner
+docker compose exec dogecoin dogecoin-cli -regtest -rpcport=18332 -rpcuser=pool -rpcpassword=pooldev getnewaddress
 ```
+
+```bash
+MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner
+```
+
+Block-Belohnungen werden erst nach 60 Bestätigungen gutgeschrieben und ausgezahlt. Auf Regtest erzeugt man die Bestätigungen mit `generate 61`.
 
 Tests:
 

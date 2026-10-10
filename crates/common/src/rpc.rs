@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -18,14 +18,24 @@ pub struct RpcClient {
 #[derive(Deserialize)]
 struct RpcResponse {
     result: Option<Value>,
-    error: Option<RpcError>,
+    error: Option<DaemonError>,
 }
 
-#[derive(Deserialize)]
-struct RpcError {
-    code: i64,
-    message: String,
+/// The daemon understood the request and refused it. Any other error from
+/// [`RpcClient::call`] means the outcome of the call is unknown.
+#[derive(Debug, Deserialize)]
+pub struct DaemonError {
+    pub code: i64,
+    pub message: String,
 }
+
+impl fmt::Display for DaemonError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} (code {})", self.message, self.code)
+    }
+}
+
+impl std::error::Error for DaemonError {}
 
 #[derive(Debug, Deserialize)]
 pub struct BlockchainInfo {
@@ -61,7 +71,7 @@ impl RpcClient {
         let parsed: RpcResponse = serde_json::from_str(&text)
             .map_err(|_| anyhow!("rpc {method}: HTTP {status}, non-JSON body"))?;
         if let Some(err) = parsed.error {
-            return Err(anyhow!("rpc {method}: {} (code {})", err.message, err.code));
+            return Err(anyhow::Error::new(err).context(format!("rpc {method}")));
         }
         serde_json::from_value(parsed.result.unwrap_or(Value::Null))
             .with_context(|| format!("rpc {method}: unexpected result shape"))

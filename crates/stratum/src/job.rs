@@ -52,6 +52,9 @@ pub struct Share {
 pub struct FoundBlock {
     pub hash: String,
     pub height: u64,
+    pub reward: u64,
+    /// In diff-1 units.
+    pub network_difficulty: f64,
     pub hex: String,
 }
 
@@ -61,6 +64,7 @@ pub struct Job {
     pub height: u64,
     /// Miners must drop older work when this is set (new chain tip).
     pub clean: bool,
+    reward: u64,
     /// The `mining.notify` line; identical for every miner because the extranonce is sent separately.
     pub notify: String,
     version: u32,
@@ -111,6 +115,7 @@ impl Job {
             id,
             height: template.height,
             clean,
+            reward: template.coinbasevalue,
             notify,
             version: template.version,
             prev_hash,
@@ -172,7 +177,15 @@ impl Job {
             self.tx_data.iter().for_each(|tx| raw.extend_from_slice(tx));
             let mut hash = sha256d(&header);
             hash.reverse();
-            FoundBlock { hash: hex::encode(hash), height: self.height, hex: hex::encode(raw) }
+            let mut target_le = self.target;
+            target_le.reverse();
+            FoundBlock {
+                hash: hex::encode(hash),
+                height: self.height,
+                reward: self.reward,
+                network_difficulty: hash_difficulty(&target_le),
+                hex: hex::encode(raw),
+            }
         });
 
         Ok(Share { difficulty: hash_difficulty(&pow) * algo.diff_multiplier(), block })

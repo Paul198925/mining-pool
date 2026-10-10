@@ -8,6 +8,7 @@ pub struct Config {
     pub database: Database,
     pub redis: Redis,
     pub stratum: Stratum,
+    pub accounting: Accounting,
     #[serde(default)]
     pub coins: Vec<Coin>,
 }
@@ -35,6 +36,14 @@ pub struct Stratum {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct Accounting {
+    /// PPLNS window as a multiple of the network difficulty.
+    pub pplns_factor: f64,
+    pub pool_fee_percent: f64,
+    pub payout_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Coin {
     pub symbol: String,
     pub name: String,
@@ -44,6 +53,10 @@ pub struct Coin {
     pub rpc_password: String,
     /// Where block rewards go. Unset means "ask the daemon wallet", which is only sane in dev.
     pub pool_address: Option<String>,
+    /// The chain's coinbase maturity: confirmations before a block reward can be spent.
+    pub block_maturity: i64,
+    /// Balances below this many coins are not paid out yet.
+    pub min_payout: f64,
 }
 
 impl Config {

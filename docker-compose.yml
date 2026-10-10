@@ -66,7 +66,7 @@ services:
   miner:
     build: docker/cpuminer
     profiles: [miner]
-    command: ["-a", "scrypt", "-o", "stratum+tcp://host.docker.internal:3333", "-u", "devminer.rig1", "-p", "x", "-t", "1"]
+    command: ["-a", "scrypt", "-o", "stratum+tcp://host.docker.internal:3333", "-u", "${MINER_ADDRESS:-unset}.rig1", "-p", "x", "-t", "1"]
 
 volumes:
   pgdata:

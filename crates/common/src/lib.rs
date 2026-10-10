@@ -1,4 +1,5 @@
 pub mod config;
+pub mod db;
 pub mod rpc;
 
 use tracing_subscriber::EnvFilter;

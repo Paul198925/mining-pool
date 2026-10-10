@@ -1,6 +1,8 @@
+mod accounts;
 mod algo;
 mod job;
 mod pool;
+mod recorder;
 mod session;
 mod template;
 mod util;
@@ -9,7 +11,7 @@ mod vardiff;
 use std::{
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -19,6 +21,7 @@ use pool_common::{
     rpc::RpcClient,
 };
 use serde_json::{Value, json};
+use sqlx::PgPool;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::watch,
@@ -30,7 +33,8 @@ use crate::{
     algo::Algo,
     job::{FoundBlock, Job},
     pool::Pool,
-    session::Session,
+    recorder::{BlockEvent, Recorder, ShareEvent},
+    session::{AcceptedShare, Session},
     vardiff::VarDiffConfig,
 };
 
@@ -39,6 +43,17 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 const VARDIFF_TICK: Duration = Duration::from_secs(30);
 
 type JobFeed = watch::Receiver<Option<Arc<Job>>>;
+
+/// What every connection needs besides its own socket.
+#[derive(Clone)]
+struct Server {
+    pool: Arc<Pool>,
+    rpc: RpcClient,
+    db: PgPool,
+    coin_id: i32,
+    recorder: Recorder,
+    jobs: JobFeed,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -50,6 +65,9 @@ async fn main() -> Result<()> {
         .find(|c| c.symbol == cfg.stratum.coin)
         .ok_or_else(|| anyhow!("stratum.coin {} is not configured under [[coins]]", cfg.stratum.coin))?;
 
+    let db = pool_common::db::connect(&cfg).await?;
+    let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
+    let recorder = Recorder::spawn(db.clone(), coin_id);
     let rpc = RpcClient::new(coin)?;
     let payout_script = payout_script(&rpc, coin).await?;
     let pool = Arc::new(Pool::new(
@@ -64,6 +82,7 @@ async fn main() -> Result<()> {
 
     let (job_tx, job_rx) = watch::channel(None);
     tokio::spawn(template::run(rpc.clone(), pool.clone(), payout_script, job_tx));
+    let ctx = Server { pool, rpc, db, coin_id, recorder: recorder.clone(), jobs: job_rx };
 
     let listener = TcpListener::bind(&cfg.stratum.listen)
         .await
@@ -74,9 +93,9 @@ async fn main() -> Result<()> {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, peer) = accepted?;
-                let (pool, rpc, jobs) = (pool.clone(), rpc.clone(), job_rx.clone());
+                let ctx = ctx.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = serve(stream, peer, pool, rpc, jobs).await {
+                    if let Err(err) = serve(stream, peer, ctx).await {
                         debug!(%peer, "connection closed: {err:#}");
                     }
                 });
@@ -85,6 +104,7 @@ async fn main() -> Result<()> {
         }
     }
     info!("shutting down");
+    recorder.flush().await;
     Ok(())
 }
 
@@ -104,10 +124,11 @@ async fn payout_script(rpc: &RpcClient, coin: &Coin) -> Result<Vec<u8>> {
     Ok(hex::decode(script)?)
 }
 
-async fn serve(stream: TcpStream, peer: SocketAddr, pool: Arc<Pool>, rpc: RpcClient, mut jobs: JobFeed) -> Result<()> {
+async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
+    let mut jobs = ctx.jobs.clone();
     stream.set_nodelay(true)?;
     let mut lines = Framed::new(stream, LinesCodec::new_with_max_length(MAX_LINE_BYTES));
-    let mut session = Session::new(pool.clone(), Instant::now());
+    let mut session = Session::new(ctx.pool.clone(), Instant::now());
     let mut tick = tokio::time::interval(VARDIFF_TICK);
     let mut last_message = tokio::time::Instant::now();
     debug!(%peer, "connected");
@@ -118,9 +139,17 @@ async fn serve(stream: TcpStream, peer: SocketAddr, pool: Arc<Pool>, rpc: RpcCli
                 let Some(line) = line else { return Ok(()) };
                 last_message = tokio::time::Instant::now();
                 let current = jobs.borrow().clone();
-                let out = session.handle_line(&line?, current.as_deref(), Instant::now());
-                if let Some(block) = out.block {
-                    tokio::spawn(submit_block(rpc.clone(), pool.clone(), block));
+                let mut out = session.handle_line(&line?, current.as_deref(), Instant::now());
+                if let Some(share) = out.share {
+                    record_share(&ctx, share);
+                }
+                if let Some(request) = out.auth {
+                    let worker = accounts::resolve(&ctx.db, &ctx.rpc, ctx.coin_id, &request.user).await;
+                    let worker = worker.unwrap_or_else(|err| {
+                        warn!(%peer, "authorize failed: {err:#}");
+                        None
+                    });
+                    out.lines.push(session.finish_authorize(request, worker));
                 }
                 out.lines
             }
@@ -144,10 +173,38 @@ async fn serve(stream: TcpStream, peer: SocketAddr, pool: Arc<Pool>, rpc: RpcCli
     }
 }
 
-async fn submit_block(rpc: RpcClient, pool: Arc<Pool>, block: FoundBlock) {
+fn record_share(ctx: &Server, share: AcceptedShare) {
+    let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    let AcceptedShare { worker, difficulty, block } = share;
+    ctx.recorder.share(ShareEvent { account_id: worker.account_id, worker_id: worker.worker_id, difficulty, at });
+    if let Some(block) = block {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            if submit_block(&ctx.rpc, &block).await {
+                let event = BlockEvent {
+                    account_id: worker.account_id,
+                    worker_id: worker.worker_id,
+                    height: block.height,
+                    hash: block.hash,
+                    reward: block.reward,
+                    network_difficulty: block.network_difficulty,
+                    at,
+                };
+                ctx.recorder.block(event).await;
+            }
+            ctx.pool.refresh.notify_one();
+        });
+    }
+}
+
+/// Returns whether the node took the block into its chain.
+async fn submit_block(rpc: &RpcClient, block: &FoundBlock) -> bool {
     // submitblock answers null on success and a reason string on rejection.
     match rpc.call::<Value>("submitblock", json!([block.hex])).await {
-        Ok(Value::Null) => info!(height = block.height, hash = %block.hash, "block accepted"),
+        Ok(Value::Null) => {
+            info!(height = block.height, hash = %block.hash, "block accepted");
+            return true;
+        }
         // Valid, but the node already has another block at this height: we lost a race.
         Ok(Value::String(reason)) if reason == "inconclusive" || reason == "duplicate" => {
             warn!(height = block.height, hash = %block.hash, %reason, "block came too late")
@@ -155,5 +212,5 @@ async fn submit_block(rpc: RpcClient, pool: Arc<Pool>, block: FoundBlock) {
         Ok(reason) => error!(height = block.height, hash = %block.hash, %reason, "block rejected"),
         Err(err) => error!(height = block.height, hash = %block.hash, "block submission failed: {err:#}"),
     }
-    pool.refresh.notify_one();
+    false
 }

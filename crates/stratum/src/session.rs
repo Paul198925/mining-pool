@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::{
+    accounts::WorkerIds,
     job::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE, FoundBlock, Job, ShareError},
     pool::Pool,
     vardiff::VarDiff,
@@ -31,7 +32,21 @@ struct Request {
 #[derive(Default)]
 pub struct Output {
     pub lines: Vec<String>,
+    pub share: Option<AcceptedShare>,
+    /// The miner wants to log in; answer with [`Session::finish_authorize`].
+    pub auth: Option<AuthRequest>,
+}
+
+pub struct AcceptedShare {
+    pub worker: WorkerIds,
+    /// The difficulty the share is credited with, in diff-1 units.
+    pub difficulty: f64,
     pub block: Option<FoundBlock>,
+}
+
+pub struct AuthRequest {
+    id: Value,
+    pub user: String,
 }
 
 /// Per-connection Stratum V1 state. Pure request/response logic, no I/O.
@@ -39,7 +54,7 @@ pub struct Session {
     pool: Arc<Pool>,
     extranonce1: [u8; EXTRANONCE1_SIZE],
     subscribed: bool,
-    worker: Option<String>,
+    worker: Option<WorkerIds>,
     vardiff: VarDiff,
     /// Difficulty each job was sent with; shares are judged against that, not the current one.
     job_diffs: HashMap<String, f64>,
@@ -85,7 +100,11 @@ impl Session {
                 out.lines.push(set_difficulty(self.vardiff.diff()));
                 out.lines.extend(current.and_then(|job| self.on_job(job)));
             }
-            "mining.authorize" => out.lines.push(self.authorize(req.id, &req.params)),
+            // Username is "<payout address>[.<worker name>]"; checking it needs the daemon and database.
+            "mining.authorize" => match req.params.first().and_then(Value::as_str).map(str::trim) {
+                Some(user) if !user.is_empty() => out.auth = Some(AuthRequest { id: req.id, user: user.to_owned() }),
+                _ => out.lines.push(error(req.id, ERR_UNAUTHORIZED, "Unauthorized worker")),
+            },
             "mining.extranonce.subscribe" => out.lines.push(ok(req.id, json!(true))),
             "mining.submit" if !self.subscribed => {
                 out.lines.push(error(req.id, ERR_NOT_SUBSCRIBED, "Not subscribed"));
@@ -94,9 +113,9 @@ impl Session {
                 out.lines.push(error(req.id, ERR_UNAUTHORIZED, "Unauthorized worker"));
             }
             "mining.submit" => {
-                let (reply, block) = self.submit(req.id, &req.params);
+                let (reply, share) = self.submit(req.id, &req.params);
                 out.lines.push(reply);
-                out.block = block;
+                out.share = share;
                 out.lines.extend(self.retarget(current, now));
             }
             _ => out.lines.push(error(req.id, ERR_OTHER, "Unknown method")),
@@ -136,18 +155,20 @@ impl Session {
         lines
     }
 
-    fn authorize(&mut self, id: Value, params: &[Value]) -> String {
-        // Username is "<payout address>[.<worker name>]"; the address is checked against the coin later.
-        match params.first().and_then(Value::as_str).map(str::trim) {
-            Some(user) if !user.is_empty() => {
-                self.worker = Some(user.to_owned());
-                ok(id, json!(true))
+    pub fn finish_authorize(&mut self, request: AuthRequest, worker: Option<WorkerIds>) -> String {
+        match worker {
+            Some(worker) => {
+                self.worker = Some(worker);
+                ok(request.id, json!(true))
             }
-            _ => error(id, ERR_UNAUTHORIZED, "Unauthorized worker"),
+            None => error(request.id, ERR_UNAUTHORIZED, "Unauthorized worker"),
         }
     }
 
-    fn submit(&mut self, id: Value, params: &[Value]) -> (String, Option<FoundBlock>) {
+    fn submit(&mut self, id: Value, params: &[Value]) -> (String, Option<AcceptedShare>) {
+        let Some(worker) = self.worker else {
+            return (error(id, ERR_UNAUTHORIZED, "Unauthorized worker"), None);
+        };
         // params: [worker, job id, extranonce2, ntime, nonce]
         let field = |i: usize| params.get(i).and_then(Value::as_str);
         let parsed = (|| {
@@ -173,8 +194,9 @@ impl Session {
             }
             Ok(share) => {
                 self.vardiff.on_share();
-                debug!(worker = self.worker.as_deref(), diff, actual = share.difficulty, "share accepted");
-                (ok(id, json!(true)), share.block)
+                debug!(worker = worker.worker_id, diff, actual = share.difficulty, "share accepted");
+                let difficulty = diff / self.pool.algo.diff_multiplier();
+                (ok(id, json!(true)), Some(AcceptedShare { worker, difficulty, block: share.block }))
             }
         }
     }
@@ -199,6 +221,13 @@ mod tests {
 
     const SUBSCRIBE: &str = r#"{"id":1,"method":"mining.subscribe","params":["cpuminer/2.5"]}"#;
     const AUTHORIZE: &str = r#"{"id":2,"method":"mining.authorize","params":["addr.rig1","x"]}"#;
+    const WORKER: WorkerIds = WorkerIds { account_id: 7, worker_id: 8 };
+
+    fn authorize(s: &mut Session) {
+        let request = s.handle_line(AUTHORIZE, None, Instant::now()).auth.expect("auth request");
+        assert_eq!(request.user, "addr.rig1");
+        assert_eq!(parse(&s.finish_authorize(request, Some(WORKER)))["result"], true);
+    }
 
     fn pool(start_diff: f64) -> Arc<Pool> {
         let vardiff = VarDiffConfig { start: start_diff, min: 1e-9, max: 1e12, share_target_secs: 15.0 };
@@ -250,6 +279,9 @@ mod tests {
         assert_eq!(parse(&s.handle_line(&submit("a", 1), None, now).lines[0])["error"][0], ERR_UNAUTHORIZED);
         let denied = s.handle_line(r#"{"id":2,"method":"mining.authorize","params":[""]}"#, None, now);
         assert_eq!(parse(&denied.lines[0])["error"][0], ERR_UNAUTHORIZED);
+        let request = s.handle_line(AUTHORIZE, None, now).auth.unwrap();
+        assert_eq!(parse(&s.finish_authorize(request, None))["error"][0], ERR_UNAUTHORIZED);
+        assert_eq!(parse(&s.handle_line(&submit("a", 1), None, now).lines[0])["error"][0], ERR_UNAUTHORIZED);
     }
 
     #[test]
@@ -259,11 +291,14 @@ mod tests {
         let now = Instant::now();
         let mut s = Session::new(pool.clone(), now);
         s.handle_line(SUBSCRIBE, Some(&job), now);
-        s.handle_line(AUTHORIZE, Some(&job), now);
+        authorize(&mut s);
 
         let accepted = s.handle_line(&submit("a", 1), Some(&job), now);
         assert_eq!(parse(&accepted.lines[0])["result"], true);
-        assert!(accepted.block.is_some(), "easy template target accepts every hash");
+        let share = accepted.share.expect("accepted share");
+        assert_eq!(share.worker, WORKER);
+        assert!((share.difficulty - 1e-9 / 65536.0).abs() < 1e-20, "credited in diff-1 units");
+        assert!(share.block.is_some(), "easy template target accepts every hash");
 
         let duplicate = s.handle_line(&submit("a", 1), Some(&job), now);
         assert_eq!(parse(&duplicate.lines[0])["error"][0], ERR_DUPLICATE);
@@ -282,7 +317,7 @@ mod tests {
         let now = Instant::now();
         let mut s = Session::new(pool.clone(), now);
         s.handle_line(SUBSCRIBE, None, now);
-        s.handle_line(AUTHORIZE, None, now);
+        authorize(&mut s);
         let job = publish(&pool, "a", true);
         assert_eq!(parse(&s.handle_line(&submit("a", 1), Some(&job), now).lines[0])["error"][0], ERR_JOB_NOT_FOUND);
     }
@@ -294,7 +329,7 @@ mod tests {
         let now = Instant::now();
         let mut s = Session::new(pool, now);
         s.handle_line(SUBSCRIBE, Some(&job), now);
-        s.handle_line(AUTHORIZE, Some(&job), now);
+        authorize(&mut s);
         let lines: Vec<String> = (0..12).flat_map(|n| s.handle_line(&submit("a", n), Some(&job), now).lines).collect();
         let methods: Vec<Value> = lines.iter().map(|l| parse(l)["method"].clone()).collect();
         assert!(methods.contains(&json!("mining.set_difficulty")));
