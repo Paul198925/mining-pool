@@ -7,7 +7,7 @@ url = "postgres://pool:pooldev@127.0.0.1:55432/pool"
 [redis]
 url = "redis://127.0.0.1:56379"
 
-[stratum]
+[[stratum]]
 listen = "127.0.0.1:3333"
 coin = "DOGE"
 start_difficulty = 0.1

@@ -17,7 +17,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, ensure};
 use futures_util::{SinkExt, StreamExt};
 use pool_common::{
-    config::{Coin, Config},
+    config::{Coin, Config, Stratum},
     rpc::RpcClient,
 };
 use serde_json::{Value, json};
@@ -60,27 +60,46 @@ struct Server {
 async fn main() -> Result<()> {
     pool_common::init_logging();
     let cfg = Config::load()?;
-    let coin = cfg
-        .coins
-        .iter()
-        .find(|c| c.symbol == cfg.stratum.coin)
-        .ok_or_else(|| anyhow!("stratum.coin {} is not configured under [[coins]]", cfg.stratum.coin))?;
-
+    ensure!(!cfg.stratum.is_empty(), "no [[stratum]] listener configured");
     let db = pool_common::db::connect(&cfg).await?;
+
+    let mut recorders = Vec::new();
+    for listener in &cfg.stratum {
+        let coin = cfg
+            .coins
+            .iter()
+            .find(|c| c.symbol == listener.coin)
+            .ok_or_else(|| anyhow!("stratum coin {} is not configured under [[coins]]", listener.coin))?;
+        let recorder = start_listener(listener, coin, db.clone())
+            .await
+            .with_context(|| format!("starting stratum for {}", coin.symbol))?;
+        recorders.push(recorder);
+    }
+
+    tokio::signal::ctrl_c().await?;
+    info!("shutting down");
+    for recorder in recorders {
+        recorder.flush().await;
+    }
+    Ok(())
+}
+
+/// Sets up everything one coin needs and starts accepting miners on its port.
+async fn start_listener(settings: &Stratum, coin: &Coin, db: PgPool) -> Result<Recorder> {
     let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
     let recorder = Recorder::spawn(db.clone(), coin_id);
     // Published so the website can tell miners where to connect.
-    let port: Option<i32> = cfg.stratum.listen.rsplit(':').next().and_then(|port| port.parse().ok());
+    let port: Option<i32> = settings.listen.rsplit(':').next().and_then(|port| port.parse().ok());
     sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1").bind(coin_id).bind(port).execute(&db).await?;
     let rpc = RpcClient::new(coin)?;
     let payout_script = payout_script(&rpc, coin).await?;
     let pool = Arc::new(Pool::new(
         Algo::from_name(&coin.algo)?,
         VarDiffConfig {
-            start: cfg.stratum.start_difficulty,
-            min: cfg.stratum.min_difficulty,
-            max: cfg.stratum.max_difficulty,
-            share_target_secs: cfg.stratum.share_target_secs,
+            start: settings.start_difficulty,
+            min: settings.min_difficulty,
+            max: settings.max_difficulty,
+            share_target_secs: settings.share_target_secs,
         },
     ));
 
@@ -88,28 +107,27 @@ async fn main() -> Result<()> {
     tokio::spawn(template::run(rpc.clone(), pool.clone(), payout_script, job_tx));
     let ctx = Server { pool, rpc, db, coin_id, recorder: recorder.clone(), jobs: job_rx };
 
-    let listener = TcpListener::bind(&cfg.stratum.listen)
-        .await
-        .with_context(|| format!("binding {}", cfg.stratum.listen))?;
-    info!(listen = %cfg.stratum.listen, coin = %coin.symbol, algo = %coin.algo, "stratum listening");
-
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, peer) = accepted?;
-                let ctx = ctx.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = serve(stream, peer, ctx).await {
-                        debug!(%peer, "connection closed: {err:#}");
-                    }
-                });
+    let listener = TcpListener::bind(&settings.listen).await.with_context(|| format!("binding {}", settings.listen))?;
+    info!(listen = %settings.listen, coin = %coin.symbol, algo = %coin.algo, "stratum listening");
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, peer)) => {
+                    let ctx = ctx.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = serve(stream, peer, ctx).await {
+                            debug!(%peer, "connection closed: {err:#}");
+                        }
+                    });
+                }
+                Err(err) => {
+                    warn!("accept failed: {err}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             }
-            _ = tokio::signal::ctrl_c() => break,
         }
-    }
-    info!("shutting down");
-    recorder.flush().await;
-    Ok(())
+    });
+    Ok(recorder)
 }
 
 /// The output script block rewards are paid to.

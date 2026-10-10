@@ -7,7 +7,9 @@ use serde::Deserialize;
 pub struct Config {
     pub database: Database,
     pub redis: Redis,
-    pub stratum: Stratum,
+    /// One listener per coin.
+    #[serde(default)]
+    pub stratum: Vec<Stratum>,
     pub accounting: Accounting,
     #[serde(default)]
     pub coins: Vec<Coin>,
