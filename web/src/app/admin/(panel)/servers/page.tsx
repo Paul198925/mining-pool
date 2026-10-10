@@ -3,7 +3,7 @@ import { Suspense } from "react";
 
 import { AutoRefresh } from "@/components/auto-refresh";
 import { Box, Empty, Skeleton } from "@/components/ui";
-import { getServers } from "@/lib/admin-queries";
+import { getServers, type NodeStatus } from "@/lib/admin-queries";
 import { COINS, poolAddresses } from "@/lib/catalog";
 import { formatAge, formatHashrate } from "@/lib/format";
 
@@ -25,6 +25,16 @@ export default function ServersPage() {
 
 function State({ ok, yes, no }: { ok: boolean; yes: string; no: string }) {
   return <span className={`block ${ok ? "confirmed" : "orphaned"}`}>{ok ? yes : no}</span>;
+}
+
+/** What a node is doing right now, in a word or a percentage. */
+function syncState(node: NodeStatus): string {
+  if (!node.reachable || node.syncProgress === null) return "–";
+  if (node.peers === 0) return "no peers";
+  if (node.syncProgress > 0.9999) return "yes";
+  // While only headers are loaded the block height stays at zero.
+  if (node.height === 0 && (node.headers ?? 0) > 0) return "loading headers";
+  return `${(node.syncProgress * 100).toFixed(1)}%`;
 }
 
 const ENROLLMENT_NOTE = {
@@ -95,7 +105,7 @@ async function Servers() {
           </table>
         )}
       </Box>
-      <Box title="Coin daemons, as seen by pool-core">
+      <Box title="Wallet nodes, as seen by pool-core">
         <table className="datagrid">
           <thead>
             <tr>
@@ -103,7 +113,10 @@ async function Servers() {
               <th>Algo</th>
               <th className="right">Port</th>
               <th>Daemon</th>
+              <th className="right">Peers</th>
               <th className="right">Height</th>
+              <th className="right">Headers</th>
+              <th className="right">Synced</th>
               <th className="right">Last contact</th>
               <th className="right">Miners</th>
               <th className="right">Hashrate</th>
@@ -120,7 +133,10 @@ async function Servers() {
                 <td>
                   <State ok={node.reachable} yes="Reachable" no="No contact" />
                 </td>
+                <td className="right">{node.peers ?? "–"}</td>
                 <td className="right">{node.height ?? "–"}</td>
+                <td className="right">{node.headers ?? "–"}</td>
+                <td className="right">{syncState(node)}</td>
                 <td className="right">{formatAge(node.statsAt)}</td>
                 <td className="right">{node.miners}</td>
                 <td className="right">{formatHashrate(node.hashrate)}</td>

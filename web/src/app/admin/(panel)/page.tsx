@@ -48,6 +48,11 @@ async function Overview() {
   const liveServers = servers.instances.filter((instance) => instance.live).length;
   const unreachable = servers.nodes.filter((node) => !node.reachable).map((node) => node.symbol);
   const alerts = problems(coins, liveServers, unreachable);
+  for (const node of servers.nodes) {
+    if (node.reachable && node.peers === 0) {
+      alerts.push(`${node.symbol}: the wallet node has no connection to the coin's network.`);
+    }
+  }
 
   return (
     <>

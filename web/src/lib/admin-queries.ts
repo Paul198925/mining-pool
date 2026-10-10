@@ -239,6 +239,11 @@ export type NodeStatus = {
   algo: string;
   stratumPort: number | null;
   height: number | null;
+  /** Block headers the node knows; ahead of `height` while it is still downloading blocks. */
+  headers: number | null;
+  peers: number | null;
+  /** 0 to 1, the node's own estimate of how much of the chain it has verified. */
+  syncProgress: number | null;
   /** When pool-core last reached the coin's daemon. */
   statsAt: Date | null;
   reachable: boolean;
@@ -259,7 +264,7 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
        FROM stratum_instances ORDER BY id`,
     ),
     db().query(
-      `SELECT c.symbol, c.algo, c.stratum_port, c.height, c.stats_at,
+      `SELECT c.symbol, c.algo, c.stratum_port, c.height, c.headers, c.peers, c.sync_progress, c.stats_at,
               COALESCE(c.stats_at > now() - interval '120 seconds', FALSE) AS reachable,
               (SELECT count(DISTINCT account_id) FROM shares s
                WHERE s.coin_id = c.id AND s.created_at > now() - make_interval(secs => $2)) AS miners,
@@ -284,6 +289,9 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
       algo: r.algo,
       stratumPort: r.stratum_port,
       height: r.height === null ? null : Number(r.height),
+      headers: r.headers === null ? null : Number(r.headers),
+      peers: r.peers,
+      syncProgress: r.sync_progress,
       statsAt: r.stats_at,
       reachable: r.reachable,
       miners: Number(r.miners),

@@ -26,13 +26,22 @@ pub async fn refresh_chain_stats(db: &PgPool, rpc: &RpcClient, coin_id: i32, coi
     // Multi-algo chains such as Xaya report one value per algorithm.
     let algo = coin.algo.trim_end_matches("-xaya");
     let per_algo = |field: &str| info[field].as_f64().or_else(|| info[field][algo].as_f64());
+    // A node that is still catching up reports its height as it goes; headers and peers
+    // show whether it is making progress at all.
+    let chain: Value = rpc.call("getblockchaininfo", json!([])).await?;
+    let peers: i64 = rpc.call("getconnectioncount", json!([])).await?;
     sqlx::query(
-        "UPDATE coins SET height = $2, network_difficulty = $3, network_hashrate = $4, stats_at = now() WHERE id = $1",
+        "UPDATE coins SET height = $2, network_difficulty = $3, network_hashrate = $4, stats_at = now(),
+                          headers = $5, sync_progress = $6, peers = $7
+         WHERE id = $1",
     )
     .bind(coin_id)
     .bind(info["blocks"].as_i64())
     .bind(per_algo("difficulty"))
     .bind(per_algo("networkhashps"))
+    .bind(chain["headers"].as_i64())
+    .bind(chain["verificationprogress"].as_f64())
+    .bind(peers as i32)
     .execute(db)
     .await?;
     Ok(())
