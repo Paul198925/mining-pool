@@ -53,7 +53,11 @@ async fn main() -> Result<()> {
 
 /// Fetches prices and then lets miners swap what they earned in a coin that is not theirs.
 async fn run_exchange(db: PgPool, coins: Vec<Coin>) {
-    let http = reqwest::Client::new();
+    // The price API turns away requests that do not say who is asking.
+    let http = match reqwest::Client::builder().user_agent(concat!("mining-pool/", env!("CARGO_PKG_VERSION"))).build() {
+        Ok(http) => http,
+        Err(err) => return error!("cannot create the http client for prices: {err:#}"),
+    };
     let mut prices = prices::Prices::default();
     let mut tick = tokio::time::interval(PRICE_INTERVAL);
     loop {
