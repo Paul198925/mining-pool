@@ -1,0 +1,91 @@
+import type { Metadata } from "next";
+import { connection } from "next/server";
+import { Suspense } from "react";
+
+import { Box, Empty, Skeleton } from "@/components/ui";
+import { requireAdmin } from "@/lib/admin-auth";
+import { COINS } from "@/lib/catalog";
+import { db } from "@/lib/db";
+import { poolAddresses } from "@/lib/mesh";
+
+import { type AdminCoin, CoinRow } from "./coin-row";
+
+export const metadata: Metadata = { title: "Coins" };
+
+export default function CoinsPage() {
+  return (
+    <Suspense fallback={<Skeleton height={200} />}>
+      <Coins />
+    </Suspense>
+  );
+}
+
+async function getCoins(): Promise<{ coins: AdminCoin[]; unknown: string[] }> {
+  const [rows, servers, addresses] = await Promise.all([
+    db().query("SELECT symbol, name, algo, enabled, pool_fee_percent, solo_fee_percent, min_payout FROM coins ORDER BY symbol"),
+    db().query("SELECT region, coins FROM stratum_instances WHERE token_hash IS NOT NULL ORDER BY id"),
+    poolAddresses(),
+  ]);
+  const coins = rows.rows.map((r) => ({
+    symbol: r.symbol,
+    name: r.name,
+    algo: r.algo,
+    enabled: r.enabled,
+    poolFeePercent: r.pool_fee_percent,
+    soloFeePercent: r.solo_fee_percent,
+    minPayout: r.min_payout === null ? null : Number(r.min_payout) / 1e8,
+    hasWallet: Boolean(addresses[r.symbol]),
+    nodes: servers.rows.filter((server) => server.coins.includes(r.symbol)).map((server) => server.region),
+  }));
+  // The pool can run these, but pool-core has no wallet node configured for them yet.
+  const unknown = COINS.map((coin) => coin.symbol).filter((symbol) => !coins.some((coin) => coin.symbol === symbol));
+  return { coins, unknown };
+}
+
+async function Coins() {
+  await connection();
+  await requireAdmin();
+  const { coins, unknown } = await getCoins();
+  return (
+    <Box title="Coins">
+      {coins.length === 0 ? (
+        <Empty>No coin is set up yet.</Empty>
+      ) : (
+        <table className="datagrid">
+          <thead>
+            <tr>
+              <th>Coin</th>
+              <th>Algo</th>
+              <th>Mining on</th>
+              <th className="right">Pool fee %</th>
+              <th className="right">Solo fee %</th>
+              <th className="right">Minimum payout</th>
+              <th>Pool wallet</th>
+              <th>Nodes on servers</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {coins.map((coin) => (
+              <CoinRow key={coin.symbol} coin={coin} />
+            ))}
+          </tbody>
+        </table>
+      )}
+      <ul>
+        <li>
+          A coin can be mined when mining is on, the pool wallet is connected and at least one server runs a node for
+          it. Switching a coin off stops mining on the stratum servers within about a minute and hides it from the
+          website; open balances are still paid out.
+        </li>
+        <li>Fees apply to blocks found from now on. The minimum payout applies from the next payout round.</li>
+        <li>Which server runs a node is set on the Servers page.</li>
+        {unknown.length > 0 && (
+          <li>
+            Not listed: {unknown.join(", ")}. The pool supports them, but pool-core has no wallet node for them yet.
+          </li>
+        )}
+      </ul>
+    </Box>
+  );
+}
