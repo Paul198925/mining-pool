@@ -39,6 +39,7 @@ export type Block = {
   networkDifficulty: number;
   finder: string;
   solo: boolean;
+  party: boolean;
   foundAt: Date;
 };
 
@@ -113,7 +114,8 @@ export async function getBlocks(limit: number): Promise<Block[]> {
   await connection();
   const { rows } = await db().query(
     `SELECT b.id, c.symbol, b.height, b.hash, b.status, b.confirmations, c.block_maturity, b.reward,
-            b.network_difficulty, a.payout_address AS finder, b.solo, b.found_at
+            b.network_difficulty, a.payout_address AS finder, b.solo,
+            b.party_id IS NOT NULL AS party, b.found_at
      FROM blocks b JOIN coins c ON c.id = b.coin_id JOIN accounts a ON a.id = b.account_id
      ORDER BY b.found_at DESC, b.id DESC
      LIMIT $1`,
@@ -131,6 +133,7 @@ export async function getBlocks(limit: number): Promise<Block[]> {
     networkDifficulty: r.network_difficulty,
     finder: r.finder,
     solo: r.solo,
+    party: r.party,
     foundAt: r.found_at,
   }));
 }

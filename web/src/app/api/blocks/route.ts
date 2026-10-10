@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
       networkDifficulty: block.networkDifficulty,
       finder: block.finder,
       solo: block.solo,
+      party: block.party,
       foundAt: block.foundAt,
     })),
   });

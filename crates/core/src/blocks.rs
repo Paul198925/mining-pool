@@ -14,8 +14,9 @@ const CREDIT_DELAY_SECS: f64 = 5.0;
 
 /// Computes the reward split for newly found blocks.
 ///
-/// A block found by a solo miner goes to that miner alone. Everything else is PPLNS:
-/// the window is the most recent non-solo shares before the block, going back until their
+/// A block found by a solo miner goes to that miner alone. Everything else is PPLNS over
+/// the shares of the group the block belongs to: the finder's party, or the public pool.
+/// The window is that group's most recent shares before the block, going back until their
 /// difficulties add up to `pplns_factor` times the network difficulty. The oldest
 /// share in the window only counts with the part that still fits.
 pub async fn credit_new_blocks(db: &PgPool, coin_id: i32, accounting: &Accounting) -> Result<()> {
@@ -44,6 +45,7 @@ pub async fn credit_new_blocks(db: &PgPool, coin_id: i32, accounting: &Accountin
                         SUM(s.difficulty) OVER (ORDER BY s.created_at DESC, s.id DESC) AS cumulative
                  FROM shares s, blocks b
                  WHERE b.id = $2 AND s.coin_id = $1 AND NOT s.solo
+                   AND s.party_id IS NOT DISTINCT FROM b.party_id
                    AND s.created_at <= b.found_at AND s.created_at > b.found_at - interval '7 days'
              ) window_shares
              WHERE cumulative - difficulty < $3

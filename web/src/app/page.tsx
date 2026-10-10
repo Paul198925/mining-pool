@@ -80,8 +80,10 @@ async function CoinCard({ coin }: { coin: Coin }) {
             </dd>
             <dt className="text-muted">Password</dt>
             <dd>
-              <span className="font-mono">x</span>, or <span className="font-mono">m=solo</span> to mine solo: you keep
-              every block you find ({coin.soloFeePercent ?? "–"}% fee) and get nothing from other miners&apos; blocks
+              <span className="font-mono">x</span> for the shared pool. <span className="font-mono">m=solo</span> mines
+              solo: you keep every block you find ({coin.soloFeePercent ?? "–"}% fee) and get nothing from other
+              miners&apos; blocks. <span className="font-mono">m=party.NAME</span> mines in a private group: everyone
+              using the same name shares the blocks the group finds
             </dd>
             <dt className="text-muted">Payouts</dt>
             <dd>

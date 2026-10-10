@@ -16,6 +16,7 @@ pub struct ShareEvent {
     pub account_id: i64,
     pub worker_id: i64,
     pub solo: bool,
+    pub party_id: Option<i64>,
     /// In diff-1 units, i.e. already divided by the algo's stratum multiplier.
     pub difficulty: f64,
     /// Unix time in seconds.
@@ -27,6 +28,7 @@ pub struct BlockEvent {
     pub account_id: i64,
     pub worker_id: i64,
     pub solo: bool,
+    pub party_id: Option<i64>,
     pub height: u64,
     pub hash: String,
     pub reward: u64,
@@ -108,10 +110,10 @@ async fn flush(db: &PgPool, coin_id: i32, shares: &mut Vec<ShareEvent>) {
         return;
     }
     let result = sqlx::query(
-        "INSERT INTO shares (coin_id, account_id, worker_id, difficulty, created_at, solo)
-         SELECT $1, s.account_id, s.worker_id, s.difficulty, to_timestamp(s.at), s.solo
-         FROM UNNEST($2::int8[], $3::int8[], $4::float8[], $5::float8[], $6::bool[])
-              AS s (account_id, worker_id, difficulty, at, solo)",
+        "INSERT INTO shares (coin_id, account_id, worker_id, difficulty, created_at, solo, party_id)
+         SELECT $1, s.account_id, s.worker_id, s.difficulty, to_timestamp(s.at), s.solo, s.party_id
+         FROM UNNEST($2::int8[], $3::int8[], $4::float8[], $5::float8[], $6::bool[], $7::int8[])
+              AS s (account_id, worker_id, difficulty, at, solo, party_id)",
     )
     .bind(coin_id)
     .bind(shares.iter().map(|s| s.account_id).collect::<Vec<_>>())
@@ -119,6 +121,7 @@ async fn flush(db: &PgPool, coin_id: i32, shares: &mut Vec<ShareEvent>) {
     .bind(shares.iter().map(|s| s.difficulty).collect::<Vec<_>>())
     .bind(shares.iter().map(|s| s.at).collect::<Vec<_>>())
     .bind(shares.iter().map(|s| s.solo).collect::<Vec<_>>())
+    .bind(shares.iter().map(|s| s.party_id).collect::<Vec<_>>())
     .execute(db)
     .await;
     match result {
@@ -138,8 +141,9 @@ async fn flush(db: &PgPool, coin_id: i32, shares: &mut Vec<ShareEvent>) {
 async fn insert_block(db: &PgPool, coin_id: i32, block: &BlockEvent) {
     for attempt in 1..=BLOCK_INSERT_ATTEMPTS {
         let result = sqlx::query(
-            "INSERT INTO blocks (coin_id, height, hash, account_id, worker_id, reward, network_difficulty, found_at, solo)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9)
+            "INSERT INTO blocks
+                 (coin_id, height, hash, account_id, worker_id, reward, network_difficulty, found_at, solo, party_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10)
              ON CONFLICT (coin_id, hash) DO NOTHING",
         )
         .bind(coin_id)
@@ -151,6 +155,7 @@ async fn insert_block(db: &PgPool, coin_id: i32, block: &BlockEvent) {
         .bind(block.network_difficulty)
         .bind(block.at)
         .bind(block.solo)
+        .bind(block.party_id)
         .execute(db)
         .await;
         match result {

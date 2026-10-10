@@ -225,7 +225,7 @@ mod tests {
 
     const SUBSCRIBE: &str = r#"{"id":1,"method":"mining.subscribe","params":["cpuminer/2.5"]}"#;
     const AUTHORIZE: &str = r#"{"id":2,"method":"mining.authorize","params":["addr.rig1","x"]}"#;
-    const WORKER: WorkerIds = WorkerIds { account_id: 7, worker_id: 8, solo: false };
+    const WORKER: WorkerIds = WorkerIds { account_id: 7, worker_id: 8, solo: false, party_id: None };
 
     fn authorize(s: &mut Session) {
         let request = s.handle_line(AUTHORIZE, None, Instant::now()).auth.expect("auth request");

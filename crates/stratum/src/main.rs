@@ -198,8 +198,8 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
 fn record_share(ctx: &Server, share: AcceptedShare) {
     let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let AcceptedShare { worker, difficulty, block } = share;
-    let WorkerIds { account_id, worker_id, solo } = worker;
-    ctx.recorder.share(ShareEvent { account_id, worker_id, solo, difficulty, at });
+    let WorkerIds { account_id, worker_id, solo, party_id } = worker;
+    ctx.recorder.share(ShareEvent { account_id, worker_id, solo, party_id, difficulty, at });
     if let Some(block) = block {
         let ctx = ctx.clone();
         tokio::spawn(async move {
@@ -208,6 +208,7 @@ fn record_share(ctx: &Server, share: AcceptedShare) {
                     account_id,
                     worker_id,
                     solo,
+                    party_id,
                     height: block.height,
                     hash: block.hash,
                     reward: block.reward,
