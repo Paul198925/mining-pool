@@ -15,6 +15,11 @@ import { db } from "./db";
 export const WG_INTERFACE = "pool0";
 export const WG_PORT = 51820;
 const WG_NETWORK = "10.77.0";
+/**
+ * Where Docker puts its networks, as far as that cannot be the private network above:
+ * 10.0.0.0 to 10.63.255.255 instead of all of 10.0.0.0/8.
+ */
+const LOCAL_DOCKER_NETWORKS = ["10.0.0.0/10", "172.16.0.0/12", "192.168.0.0/16"];
 
 /** For local tests on one Docker host, where the servers are containers without WireGuard. */
 export function meshEnabled(): boolean {
@@ -271,7 +276,13 @@ export async function nodeCompose(server: Server, poolUrl: string): Promise<stri
     const wallet = server.wallets.includes(coin.symbol);
     // A wallet node takes commands from pool-core's machine and from this server, nobody else.
     const allowed = wallet
-      ? [wgAddress(server.id), ...(coreHost ? [wgAddress(coreHost.id)] : [])].map((ip) => `      - -rpcallowip=${ip}/32`)
+      ? [
+          `${wgAddress(server.id)}/32`,
+          ...(coreHost ? [`${wgAddress(coreHost.id)}/32`] : []),
+          // On the pool host itself pool-core does not come through the private network: it
+          // calls from its container, with an address of a local Docker network.
+          ...(server.core ? LOCAL_DOCKER_NETWORKS : []),
+        ].map((range) => `      - -rpcallowip=${range}`)
       : [`      - -rpcallowip=${WG_NETWORK}.0/24`];
     lines.push(
       `  ${coin.service}:`,
