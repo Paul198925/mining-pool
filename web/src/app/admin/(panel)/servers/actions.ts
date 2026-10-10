@@ -54,6 +54,13 @@ export async function addServer(_previous: AddServerState, form: FormData): Prom
   if (!stratum && !core && coins.length + wallets.length === 0) return { error: "Choose at least one thing for the server to do." };
   const conflict = await taken(chosen, null);
   if (conflict) return { error: conflict };
+  // One machine is one server: it holds one key and one address in the private network.
+  const same = await db().query("SELECT region FROM stratum_instances WHERE lower(host) = lower($1)", [host]);
+  if (same.rows.length > 0) {
+    return {
+      error: `${host} is already the server "${same.rows[0].region}". To have it do more, click what it runs in the list below, tick the boxes and run the update command there.`,
+    };
+  }
 
   const code = newSecret();
   // The lowest free instance id; a server that was removed frees its id again.
