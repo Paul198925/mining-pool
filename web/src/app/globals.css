@@ -163,6 +163,25 @@ a:hover {
   font-family: monospace;
 }
 
+/* The stratum line generator: one label/field pair per row */
+.generator {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 10px;
+  align-items: center;
+}
+
+.generator label {
+  font-weight: bold;
+}
+
+.generator select {
+  padding: 3px 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background-color: white;
+}
+
 .button {
   padding: 4px 12px;
   border: 1px solid #bbb;

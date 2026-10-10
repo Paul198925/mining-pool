@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { BlocksTable } from "@/components/blocks-table";
 import { WalletSearch } from "@/components/miner-search";
+import { StratumGenerator } from "@/components/stratum-generator";
 import { Box, Empty, Skeleton } from "@/components/ui";
 import { formatHashrate } from "@/lib/format";
 import { getBlocks, getCoins } from "@/lib/queries";
@@ -46,11 +47,24 @@ async function StratumServers() {
   // Reading the coins first makes this render per request, so the host can come from the environment.
   const coins = await getCoins();
   const host = process.env.POOL_STRATUM_HOST ?? "localhost";
-  const example = coins.find((coin) => coin.stratumPort !== null);
+  const mineable = coins.flatMap((coin) =>
+    coin.stratumPort === null
+      ? []
+      : [{ symbol: coin.symbol, name: coin.name, algo: coin.algo, port: coin.stratumPort }],
+  );
   return (
     <Box title="STRATUM SERVERS">
       <ul>
         <li>
+          {mineable.length === 0 ? (
+            <Empty>No stratum server is running.</Empty>
+          ) : (
+            <StratumGenerator coins={mineable} host={host} />
+          )}
+        </li>
+        <li>
+          Choose what you want to mine and enter your wallet address; the line above is what your miner needs. The
+          general form is:
           <p className="cmdline">
             -a &lt;ALGO&gt; -o stratum+tcp://{host}:&lt;PORT&gt; -u &lt;WALLET_ADDRESS&gt;[.&lt;WORKER&gt;] [-p
             &lt;OPTIONS&gt;]
@@ -59,28 +73,15 @@ async function StratumServers() {
         <li>
           &lt;WALLET_ADDRESS&gt; must be valid for the currency you mine. <b>Do not use an address of another coin.</b>
         </li>
-        <li>See the &quot;Pool Status&quot; area for ALGO and PORT numbers.</li>
         <li>
-          The coin is recognised from your wallet address. As optional password, you can use{" "}
-          <b>-p c=&lt;SYMBOL&gt;</b> to name it yourself.
+          Options: <b>c=&lt;SYMBOL&gt;</b> names the coin (otherwise it is recognised from your address),{" "}
+          <b>m=solo</b> mines solo, <b>m=party.&lt;NAME&gt;</b> mines in a private group. Separate several options
+          with commas.
         </li>
         <li>
-          Add <b>m=solo</b> to mine solo: you keep every block you find and get nothing from
-          other miners&apos; blocks.
+          Solo: you keep every block you find and get nothing from other miners&apos; blocks. Party: everyone using
+          the same name shares the blocks the group finds.
         </li>
-        <li>
-          Add <b>m=party.&lt;NAME&gt;</b> to mine in a private group: everyone using the same name shares the blocks
-          the group finds. Separate several options with commas, e.g. <b>-p c=DOGE,m=solo</b>.
-        </li>
-        {example && (
-          <li>
-            Example:
-            <p className="cmdline">
-              -a {example.algo} -o stratum+tcp://{host}:{example.stratumPort} -u &lt;{example.symbol}_ADDRESS&gt;.rig1
-              -p c={example.symbol}
-            </p>
-          </li>
-        )}
       </ul>
     </Box>
   );
