@@ -9,6 +9,7 @@ export type CoinChoice = { symbol: string; name: string; algo: string; available
 export function AddServerForm({ coins }: { coins: CoinChoice[] }) {
   const [state, action, pending] = useActionState<AddServerState, FormData>(addServer, {});
   const [copied, setCopied] = useState(false);
+  const unavailable = coins.filter((coin) => !coin.available);
   return (
     <form action={action} className="grid gap-2 p-1" onSubmit={() => setCopied(false)}>
       <div className="generator">
@@ -35,8 +36,17 @@ export function AddServerForm({ coins }: { coins: CoinChoice[] }) {
           ))}
         </div>
       </div>
+      {unavailable.length > 0 && (
+        <p className="alert">
+          {unavailable.length === coins.length ? "No coin can be chosen yet. " : ""}
+          {unavailable.map((coin) => coin.symbol).join(", ")}: the address of the pool wallet is missing. Block rewards
+          are paid to that address, so a server cannot mine the coin without it. Set{" "}
+          {unavailable.map((coin) => `POOL_ADDRESS_${coin.symbol}`).join(", ")} in the web app&apos;s environment and
+          redeploy.
+        </p>
+      )}
       <div>
-        <button type="submit" className="button" disabled={pending}>
+        <button type="submit" className="button" disabled={pending || unavailable.length === coins.length}>
           {pending ? "Creating…" : "Create install command"}
         </button>
       </div>
