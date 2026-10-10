@@ -77,6 +77,10 @@ pub struct Coin {
     pub rpc_user: String,
     #[serde(default)]
     pub rpc_password: String,
+    /// Symbol of the coin this one is merge-mined with: miners work on that coin, and
+    /// every share is also tried as a proof of work for this one.
+    #[serde(default)]
+    pub aux_of: Option<String>,
     /// Where block rewards go. Unset means "ask the daemon wallet", which is only sane in dev.
     pub pool_address: Option<String>,
     /// Encrypts the pool wallet and unlocks it for payouts. Comes from the environment.

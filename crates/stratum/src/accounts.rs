@@ -31,6 +31,14 @@ pub struct Candidate<'a> {
     pub coin_id: i32,
     pub symbol: &'a str,
     pub rpc: &'a RpcClient,
+    /// The coin that is merge-mined along with this one.
+    pub aux: Option<AuxCandidate<'a>>,
+}
+
+pub struct AuxCandidate<'a> {
+    pub coin_id: i32,
+    pub symbol: &'a str,
+    pub rpc: &'a RpcClient,
 }
 
 /// Resolves a stratum login. The username is `<payout address>[.<worker name>]`; the password
@@ -38,13 +46,19 @@ pub struct Candidate<'a> {
 /// `m=party.<name>` the reward mode.
 ///
 /// Without `c=`, the coin is the first one on the port for which the address is valid.
-/// Returns the index of the chosen candidate, or `None` if no coin accepts the login.
+///
+/// Where a second coin is merge-mined along, `<SYMBOL>=<address>` names the miner's address
+/// on that chain. Without it the second coin is credited to the same account, where it
+/// stays as a balance: it cannot be paid out to an address of another chain.
+///
+/// Returns the index of the chosen candidate with the miner's ids for it and for its
+/// merge-mined coin, or `None` if no coin accepts the login.
 pub async fn resolve(
     backend: &Backend,
     candidates: &[Candidate<'_>],
     user: &str,
     password: &str,
-) -> Result<Option<(usize, WorkerIds)>> {
+) -> Result<Option<(usize, WorkerIds, Option<WorkerIds>)>> {
     let (address, worker) = user.split_once('.').unwrap_or((user, ""));
     // Cheap rejection of junk before asking the daemons.
     let plausible = (20..=100).contains(&address.len()) && address.chars().all(|c| c.is_ascii_alphanumeric());
@@ -82,7 +96,7 @@ pub async fn resolve(
     };
     let solo = mode == Mode::Solo;
     let ids = match backend {
-        Backend::Direct(db) => register(db, coin_id, address, worker, solo, party_key.as_deref()).await?,
+        Backend::Direct(db) => register(db, coin_id, address, worker, solo, coin_id, party_key.as_deref()).await?,
         Backend::Api(api) => {
             let login = json!({
                 "symbol": candidates[index].symbol, "address": address, "worker": worker,
@@ -91,16 +105,49 @@ pub async fn resolve(
             api.post("/api/node/authorize", &login).await?
         }
     };
-    Ok(Some((index, ids)))
+
+    let Some(aux) = &candidates[index].aux else {
+        return Ok(Some((index, ids, None)));
+    };
+    // The account that is credited on the merged chain: one of that chain if the miner
+    // named an address there, otherwise the account of this login.
+    let (account_coin, account_symbol, account_address) = match address_option(password, aux.symbol) {
+        Some(own) => {
+            let plausible = (20..=100).contains(&own.len()) && own.chars().all(|c| c.is_ascii_alphanumeric());
+            let info: Value =
+                if plausible { aux.rpc.call("validateaddress", json!([own])).await? } else { Value::Null };
+            if info["isvalid"] != true {
+                // Refused rather than ignored: the miner would mine on and never see those coins.
+                return Ok(None);
+            }
+            (aux.coin_id, aux.symbol, own)
+        }
+        None => (coin_id, candidates[index].symbol, address),
+    };
+    let aux_ids = match backend {
+        Backend::Direct(db) => {
+            register(db, account_coin, account_address, worker, solo, aux.coin_id, party_key.as_deref()).await?
+        }
+        Backend::Api(api) => {
+            let login = json!({
+                "symbol": aux.symbol, "payout_symbol": account_symbol, "address": account_address,
+                "worker": worker, "solo": solo, "party_key_hash": party_key,
+            });
+            api.post("/api/node/authorize", &login).await?
+        }
+    };
+    Ok(Some((index, ids, Some(aux_ids))))
 }
 
 /// Maps a login to the pool's account, worker and party ids, creating them on first sight.
+/// The account belongs to the coin its address is on; a party is per mined coin.
 async fn register(
     db: &PgPool,
-    coin_id: i32,
+    account_coin_id: i32,
     address: &str,
     worker: &str,
     solo: bool,
+    party_coin_id: i32,
     party_key: Option<&str>,
 ) -> Result<WorkerIds> {
     let account_id: i64 = sqlx::query_scalar(
@@ -108,7 +155,7 @@ async fn register(
          ON CONFLICT (payout_coin_id, payout_address) DO UPDATE SET payout_address = EXCLUDED.payout_address
          RETURNING id",
     )
-    .bind(coin_id)
+    .bind(account_coin_id)
     .bind(address)
     .fetch_one(db)
     .await?;
@@ -128,7 +175,7 @@ async fn register(
                  ON CONFLICT (coin_id, key_hash) DO UPDATE SET key_hash = EXCLUDED.key_hash
                  RETURNING id",
             )
-            .bind(coin_id)
+            .bind(party_coin_id)
             .bind(key_hash)
             .fetch_one(db)
             .await?;
@@ -144,6 +191,14 @@ fn coin_option(password: &str) -> Option<&str> {
     password.split(',').map(str::trim).find_map(|option| {
         let (key, symbol) = option.split_once('=')?;
         (key.eq_ignore_ascii_case("c") && !symbol.is_empty()).then_some(symbol)
+    })
+}
+
+/// The address from a `<SYMBOL>=<address>` password option.
+fn address_option<'a>(password: &'a str, symbol: &str) -> Option<&'a str> {
+    password.split(',').map(str::trim).find_map(|option| {
+        let (key, address) = option.split_once('=')?;
+        (key.eq_ignore_ascii_case(symbol) && !address.is_empty()).then_some(address)
     })
 }
 
@@ -181,6 +236,13 @@ mod tests {
         assert_eq!(coin_option("m=solo, C=rod"), Some("rod"));
         assert_eq!(coin_option("x"), None);
         assert_eq!(coin_option("c="), None);
+    }
+
+    #[test]
+    fn merged_coin_address_is_named_by_symbol() {
+        assert_eq!(address_option("c=LTC,doge=DAbc", "DOGE"), Some("DAbc"));
+        assert_eq!(address_option("c=LTC", "DOGE"), None);
+        assert_eq!(address_option("DOGE=", "DOGE"), None);
     }
 
     #[test]

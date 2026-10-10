@@ -5,6 +5,7 @@ mod chain;
 mod instance;
 mod job;
 mod kawpow;
+mod merged;
 mod pool;
 mod recorder;
 mod session;
@@ -33,7 +34,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    accounts::{Candidate, WorkerIds},
+    accounts::{AuxCandidate, Candidate, WorkerIds},
     algo::Algo,
     backend::{ApiClient, Backend},
     chain::Chain,
@@ -59,6 +60,16 @@ struct CoinCtx {
     pool: Arc<Pool>,
     recorder: Recorder,
     jobs: JobFeed,
+    aux: Option<AuxCtx>,
+}
+
+/// A coin that is merge-mined along with another one.
+#[derive(Clone)]
+struct AuxCtx {
+    symbol: String,
+    coin_id: i32,
+    rpc: RpcClient,
+    recorder: Recorder,
 }
 
 /// What every connection on a port needs besides its own socket.
@@ -138,6 +149,12 @@ async fn start_listener(
     instance_id: u8,
     backend: Backend,
 ) -> Result<Vec<Recorder>> {
+    // Merge-mined coins have no miners of their own: they ride along with their parent.
+    let (merged, coins): (Vec<&Coin>, Vec<&Coin>) = coins.iter().copied().partition(|coin| coin.aux_of.is_some());
+    ensure!(!coins.is_empty(), "every coin on this port is merge-mined, none can be mined directly");
+    for coin in merged.iter().filter(|coin| !coins.iter().any(|parent| Some(&parent.symbol) == coin.aux_of.as_ref())) {
+        warn!(coin = %coin.symbol, "the coin it is merge-mined with is not on this port, it will not be mined");
+    }
     // The extranonce layout is announced at subscribe, before the miner names a coin.
     let chain = Chain::from_name(&coins[0].chain)?;
     ensure!(
@@ -163,29 +180,37 @@ async fn start_listener(
     let port_number: Option<i32> = settings.listen.rsplit(':').next().and_then(|port| port.parse().ok());
 
     let mut contexts = Vec::new();
-    for coin in coins {
-        let (coin_id, sink) = match &backend {
-            Backend::Direct(db) => {
-                let coin_id = pool_common::db::ensure_coin(db, coin).await?;
-                // Published so the website can tell miners where to connect.
-                sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1")
-                    .bind(coin_id)
-                    .bind(port_number)
-                    .execute(db)
-                    .await?;
-                (coin_id, Sink::Direct { db: db.clone(), coin_id })
-            }
-            // The pool registered the coin when it handed out this server's configuration.
-            Backend::Api(api) => (0, Sink::Api { api: api.clone(), symbol: coin.symbol.clone() }),
-        };
+    for coin in &coins {
+        let (coin_id, sink) = open_coin(&backend, coin, port_number).await?;
         let rpc = RpcClient::new(coin)?;
         let pool = Arc::new(Pool::default());
         let (job_tx, jobs) = watch::channel(None);
-        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, (*coin).clone(), instance_id, job_tx));
+
+        let mut riders = merged.iter().filter(|rider| rider.aux_of.as_ref() == Some(&coin.symbol));
+        let rider = riders.next();
+        ensure!(riders.next().is_none(), "{} can only have one coin merge-mined with it", coin.symbol);
+        let (aux, aux_feed) = match rider {
+            Some(rider) => {
+                ensure!(chain == Chain::Bitcoin, "merged mining needs the bitcoin chain type");
+                let (coin_id, sink) = open_coin(&backend, rider, port_number).await?;
+                let rpc = RpcClient::new(rider)?;
+                let (work_tx, work) = watch::channel(None);
+                tokio::spawn(merged::run(rpc.clone(), (*rider).clone(), pool.clone(), work_tx));
+                let aux = AuxCtx { symbol: rider.symbol.clone(), coin_id, rpc, recorder: Recorder::spawn(sink) };
+                (Some(aux), Some(work))
+            }
+            None => (None, None),
+        };
+
+        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, (*coin).clone(), instance_id, aux_feed, job_tx));
         let recorder = Recorder::spawn(sink);
-        contexts.push(CoinCtx { symbol: coin.symbol.clone(), coin_id, rpc, pool, recorder, jobs });
+        contexts.push(CoinCtx { symbol: coin.symbol.clone(), coin_id, rpc, pool, recorder, jobs, aux });
     }
-    let recorders = contexts.iter().map(|coin| coin.recorder.clone()).collect();
+    let recorders = contexts
+        .iter()
+        .flat_map(|coin| [Some(coin.recorder.clone()), coin.aux.as_ref().map(|aux| aux.recorder.clone())])
+        .flatten()
+        .collect();
     let symbols: Vec<&str> = coins.iter().map(|coin| coin.symbol.as_str()).collect();
     let ctx = Server { port, backend, coins: Arc::new(contexts) };
 
@@ -210,6 +235,24 @@ async fn start_listener(
         }
     });
     Ok(recorders)
+}
+
+/// The coin's database id and where its shares go.
+async fn open_coin(backend: &Backend, coin: &Coin, port_number: Option<i32>) -> Result<(i32, Sink)> {
+    match backend {
+        Backend::Direct(db) => {
+            let coin_id = pool_common::db::ensure_coin(db, coin).await?;
+            // Published so the website can tell miners where to connect.
+            sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1")
+                .bind(coin_id)
+                .bind(port_number)
+                .execute(db)
+                .await?;
+            Ok((coin_id, Sink::Direct { db: db.clone(), coin_id }))
+        }
+        // The pool registered the coin when it handed out this server's configuration.
+        Backend::Api(api) => Ok((0, Sink::Api { api: api.clone(), symbol: coin.symbol.clone() })),
+    }
 }
 
 async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
@@ -237,9 +280,9 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
                         None
                     });
                     let reply = match login {
-                        Some((mut chosen, worker)) => {
+                        Some((mut chosen, worker, aux_worker)) => {
                             let current = chosen.jobs.borrow_and_update().clone();
-                            let login = Login { worker, pool: chosen.pool.clone() };
+                            let login = Login { worker, aux_worker, pool: chosen.pool.clone() };
                             debug!(%peer, coin = %chosen.symbol, "authorized");
                             coin = Some(chosen);
                             session.finish_authorize(request, Some(login), current.as_deref())
@@ -283,23 +326,52 @@ async fn login(
     current: &Option<CoinCtx>,
     user: &str,
     password: &str,
-) -> Result<Option<(CoinCtx, WorkerIds)>> {
+) -> Result<Option<(CoinCtx, WorkerIds, Option<WorkerIds>)>> {
     let candidates: Vec<Candidate> = ctx
         .coins
         .iter()
         .filter(|coin| current.as_ref().is_none_or(|current| current.symbol == coin.symbol))
-        .map(|coin| Candidate { coin_id: coin.coin_id, symbol: &coin.symbol, rpc: &coin.rpc })
+        .map(|coin| Candidate {
+            coin_id: coin.coin_id,
+            symbol: &coin.symbol,
+            rpc: &coin.rpc,
+            aux: coin.aux.as_ref().map(|aux| AuxCandidate { coin_id: aux.coin_id, symbol: &aux.symbol, rpc: &aux.rpc }),
+        })
         .collect();
-    let Some((index, worker)) = accounts::resolve(&ctx.backend, &candidates, user, password).await? else {
+    let Some((index, worker, aux_worker)) = accounts::resolve(&ctx.backend, &candidates, user, password).await? else {
         return Ok(None);
     };
     let symbol = candidates[index].symbol;
-    Ok(ctx.coins.iter().find(|coin| coin.symbol == symbol).map(|coin| (coin.clone(), worker)))
+    Ok(ctx.coins.iter().find(|coin| coin.symbol == symbol).map(|coin| (coin.clone(), worker, aux_worker)))
 }
 
 fn record_share(coin: &CoinCtx, share: AcceptedShare) {
     let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
-    let AcceptedShare { worker, difficulty, block } = share;
+    let AcceptedShare { worker, aux_worker, difficulty, block, aux_block } = share;
+    // The same work counts on the merge-mined chain, for whoever the miner is there.
+    if let (Some(aux), Some(ids)) = (&coin.aux, aux_worker) {
+        let WorkerIds { account_id, worker_id, solo, party_id } = ids;
+        aux.recorder.share(ShareEvent { account_id, worker_id, solo, party_id, difficulty, at });
+        if let Some(block) = aux_block {
+            let aux = aux.clone();
+            tokio::spawn(async move {
+                if submit_aux_block(&aux, &block).await {
+                    let event = BlockEvent {
+                        account_id,
+                        worker_id,
+                        solo,
+                        party_id,
+                        height: block.height,
+                        hash: block.hash,
+                        reward: block.reward,
+                        network_difficulty: block.network_difficulty,
+                        at,
+                    };
+                    aux.recorder.block(event).await;
+                }
+            });
+        }
+    }
     let WorkerIds { account_id, worker_id, solo, party_id } = worker;
     coin.recorder.share(ShareEvent { account_id, worker_id, solo, party_id, difficulty, at });
     if let Some(block) = block {
@@ -321,6 +393,29 @@ fn record_share(coin: &CoinCtx, share: AcceptedShare) {
             }
             coin.pool.refresh.notify_one();
         });
+    }
+}
+
+/// Hands a proof of work to the merge-mined chain. Returns whether its node took the block.
+async fn submit_aux_block(aux: &AuxCtx, block: &FoundBlock) -> bool {
+    match aux.rpc.call::<Value>("submitauxblock", json!([block.hash, block.hex])).await {
+        Ok(Value::Bool(true)) => {
+            info!(coin = %aux.symbol, height = block.height, hash = %block.hash, "merge-mined block accepted");
+            true
+        }
+        Ok(answer) => {
+            warn!(coin = %aux.symbol, height = block.height, hash = %block.hash, %answer, "merge-mined block not accepted");
+            false
+        }
+        // The merged chain has moved on since this work was handed out.
+        Err(err) if format!("{err:#}").contains("block hash unknown") => {
+            warn!(coin = %aux.symbol, height = block.height, "merge-mined block came too late");
+            false
+        }
+        Err(err) => {
+            error!(coin = %aux.symbol, height = block.height, "merge-mined block submission failed: {err:#}");
+            false
+        }
     }
 }
 

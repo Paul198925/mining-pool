@@ -10,6 +10,7 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 
 use crate::{
+    merged::AuxFeed,
     chain::Chain,
     job::{BlockTemplate, Job},
     kawpow::{self, Epoch},
@@ -21,16 +22,21 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const DAEMON_RETRY: Duration = Duration::from_secs(10);
 
-/// The output script block rewards are paid to.
-async fn payout_script(rpc: &RpcClient, coin: &Coin) -> Result<Vec<u8>> {
-    let address = match &coin.pool_address {
-        Some(address) => address.clone(),
+/// The address block rewards are paid to.
+pub async fn payout_address(rpc: &RpcClient, coin: &Coin) -> Result<String> {
+    match &coin.pool_address {
+        Some(address) => Ok(address.clone()),
         None => {
             let address: String = rpc.call("getnewaddress", json!([])).await?;
             warn!(%address, "no pool_address configured, paying rewards to a fresh daemon wallet address");
-            address
+            Ok(address)
         }
-    };
+    }
+}
+
+/// The output script block rewards are paid to.
+async fn payout_script(rpc: &RpcClient, coin: &Coin) -> Result<Vec<u8>> {
+    let address = payout_address(rpc, coin).await?;
     let info: Value = rpc.call("validateaddress", json!([address])).await?;
     ensure!(info["isvalid"] == true, "pool address {address} is not valid for {}", coin.symbol);
     let script = info["scriptPubKey"].as_str().context("validateaddress returned no scriptPubKey")?;
@@ -44,6 +50,7 @@ pub async fn run(
     chain: Chain,
     coin: Coin,
     instance_id: u8,
+    aux: Option<AuxFeed>,
     jobs: watch::Sender<Option<Arc<Job>>>,
 ) {
     // The daemon may be on another server, or still starting: the other coins must not wait for it.
@@ -61,7 +68,8 @@ pub async fn run(
         }
     };
     let request: Value = chain.template_request(&coin.template_rules);
-    let mut last: Option<(String, Vec<String>, Instant)> = None;
+    // Previous block, transactions, merged block and time of the last job.
+    let mut last: Option<(String, Vec<String>, Option<[u8; 32]>, Instant)> = None;
     let mut last_error = None;
     let mut next_id = 1u64;
     let mut tick = tokio::time::interval(POLL_INTERVAL);
@@ -85,11 +93,15 @@ pub async fn run(
         last_error = None;
 
         let txids: Vec<String> = template.transactions.iter().map(|tx| tx.hash.clone()).collect();
+        let merged = aux.as_ref().and_then(|feed| feed.borrow().clone());
+        let merged_hash = merged.as_ref().map(|aux| aux.hash);
         let (clean, changed) = match &last {
             None => (true, true),
-            Some((prev, last_txids, at)) => {
+            Some((prev, last_txids, last_merged, at)) => {
                 let clean = *prev != template.previousblockhash;
-                (clean, clean || *last_txids != txids || at.elapsed() >= REFRESH_INTERVAL)
+                // A new block on the merged chain needs new work, but the old work stays valid.
+                let stale = *last_txids != txids || *last_merged != merged_hash || at.elapsed() >= REFRESH_INTERVAL;
+                (clean, clean || stale)
             }
         };
         if !changed {
@@ -109,7 +121,7 @@ pub async fn run(
                 tokio::task::spawn_blocking(move || kawpow::EPOCHS.get(epoch + 1).map(drop));
             }
         }
-        match Job::new(format!("{next_id:x}"), chain, instance_id, &template, &payout_script, clean) {
+        match Job::with_aux(format!("{next_id:x}"), chain, instance_id, &template, &payout_script, clean, merged) {
             Ok(job) => {
                 next_id += 1;
                 if clean {
@@ -118,7 +130,7 @@ pub async fn run(
                 let job = Arc::new(job);
                 pool.add_job(job.clone());
                 jobs.send_replace(Some(job));
-                last = Some((template.previousblockhash, txids, Instant::now()));
+                last = Some((template.previousblockhash, txids, merged_hash, Instant::now()));
             }
             Err(err) => warn!("unusable block template: {err:#}"),
         }

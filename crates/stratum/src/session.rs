@@ -41,9 +41,13 @@ pub struct Output {
 
 pub struct AcceptedShare {
     pub worker: WorkerIds,
+    /// Who gets the credit on the merge-mined chain, if the coin has one.
+    pub aux_worker: Option<WorkerIds>,
     /// The difficulty the share is credited with, in diff-1 units.
     pub difficulty: f64,
     pub block: Option<FoundBlock>,
+    /// A block of the merge-mined chain; its `hex` is the proof to submit.
+    pub aux_block: Option<FoundBlock>,
 }
 
 pub struct AuthRequest {
@@ -55,6 +59,7 @@ pub struct AuthRequest {
 /// A successful login: who the miner is and which coin's work they get.
 pub struct Login {
     pub worker: WorkerIds,
+    pub aux_worker: Option<WorkerIds>,
     pub pool: Arc<Pool>,
 }
 
@@ -202,7 +207,7 @@ impl Session {
     }
 
     fn submit(&mut self, id: Value, params: &[Value]) -> (String, Option<AcceptedShare>) {
-        let Some(Login { worker, pool }) = &self.login else {
+        let Some(Login { worker, aux_worker, pool }) = &self.login else {
             return (error(id, ERR_UNAUTHORIZED, "Unauthorized worker"), None);
         };
         // Some miners prefix hex with "0x".
@@ -243,15 +248,17 @@ impl Session {
             Err(ShareError::NonceOutOfRange) => (error(id, ERR_OTHER, "Nonce out of range"), None),
             Err(ShareError::BadMixHash) => (error(id, ERR_OTHER, "Invalid mix hash"), None),
             // A block is a block even if vardiff has pushed the miner above network difficulty.
-            Ok(share) if share.block.is_none() && share.difficulty < floor => {
+            Ok(share) if share.block.is_none() && share.aux_block.is_none() && share.difficulty < floor => {
                 (error(id, ERR_LOW_DIFFICULTY, "Low difficulty share"), None)
             }
             Ok(share) => {
-                let worker = *worker;
+                let (worker, aux_worker) = (*worker, *aux_worker);
                 self.vardiff.on_share();
                 debug!(worker = worker.worker_id, diff, actual = share.difficulty, "share accepted");
                 let difficulty = diff / self.port.algo.diff_multiplier();
-                (ok(id, json!(true)), Some(AcceptedShare { worker, difficulty, block: share.block }))
+                let accepted =
+                    AcceptedShare { worker, aux_worker, difficulty, block: share.block, aux_block: share.aux_block };
+                (ok(id, json!(true)), Some(accepted))
             }
         }
     }
@@ -288,7 +295,7 @@ mod tests {
     fn authorize(s: &mut Session, pool: &Arc<Pool>, current: Option<&Job>) -> Vec<String> {
         let request = s.handle_line(AUTHORIZE, None, Instant::now()).auth.expect("auth request");
         assert_eq!((request.user.as_str(), request.password.as_str()), ("addr.rig1", "c=DOGE"));
-        s.finish_authorize(request, Some(Login { worker: WORKER, pool: pool.clone() }), current)
+        s.finish_authorize(request, Some(Login { worker: WORKER, aux_worker: None, pool: pool.clone() }), current)
     }
 
     fn submit(job_id: &str, nonce: u32) -> String {

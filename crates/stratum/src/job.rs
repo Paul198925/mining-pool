@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::{
     algo::Algo,
+    merged::{self, AuxWork},
     chain::Chain,
     kawpow::{self, Epoch},
     util::{
@@ -65,6 +66,8 @@ pub struct Share {
     /// In stratum units, i.e. comparable to what `mining.set_difficulty` sent.
     pub difficulty: f64,
     pub block: Option<FoundBlock>,
+    /// A block of the merge-mined chain; its `hex` is the proof to submit, not a block.
+    pub aux_block: Option<FoundBlock>,
 }
 
 pub struct FoundBlock {
@@ -91,6 +94,10 @@ pub struct Job {
     target: [u8; 32],
     extranonce2_size: usize,
     tx_data: Vec<Vec<u8>>,
+    /// The MimbleWimble extension block that goes after the transactions.
+    mweb: Option<Vec<u8>>,
+    /// The merge-mined chain's block this job's coinbase commits to.
+    aux: Option<Arc<AuxWork>>,
     work: Work,
     seen: Mutex<HashSet<(Vec<u8>, u32, u32)>>,
 }
@@ -125,6 +132,7 @@ enum Work {
 }
 
 impl Job {
+    #[cfg(test)]
     pub fn new(
         id: String,
         chain: Chain,
@@ -133,8 +141,21 @@ impl Job {
         payout_script: &[u8],
         clean: bool,
     ) -> Result<Self> {
-        // Building such a block needs the extension block appended; this pool does not do that yet.
-        ensure!(template.mweb.is_none(), "the template carries an MWEB extension block");
+        Self::with_aux(id, chain, instance_id, template, payout_script, clean, None)
+    }
+
+    /// Like [`Job::new`], with a block of another chain to merge-mine along.
+    pub fn with_aux(
+        id: String,
+        chain: Chain,
+        instance_id: u8,
+        template: &BlockTemplate,
+        payout_script: &[u8],
+        clean: bool,
+        aux: Option<Arc<AuxWork>>,
+    ) -> Result<Self> {
+        let mweb = template.mweb.as_deref().map(hex::decode).transpose().context("template MWEB block")?;
+        ensure!(chain == Chain::Bitcoin || (mweb.is_none() && aux.is_none()), "MWEB and merged mining need the bitcoin layout");
         let prev_hash = hash_from_display_hex(&template.previousblockhash)?;
         let nbits = u32::from_str_radix(&template.bits, 16).context("template bits")?;
         let mut txids = Vec::with_capacity(template.transactions.len());
@@ -155,8 +176,13 @@ impl Job {
         let (work, params) = match chain {
             Chain::Bitcoin => {
                 let extranonce_len = chain.extranonce1_size() + chain.extranonce2_size();
+                // The merged chain looks for its commitment anywhere in the coinbase script.
+                let tag = match &aux {
+                    Some(aux) => [COINBASE_TAG, &aux.commitment()].concat(),
+                    None => COINBASE_TAG.to_vec(),
+                };
                 let (coinb1, coinb2) =
-                    build_coinbase(template, payout_script, commitment.as_deref(), extranonce_len, COINBASE_TAG);
+                    build_coinbase(template, payout_script, commitment.as_deref(), extranonce_len, &tag);
                 let params = json!([
                     id,
                     stratum_prev_hash(&prev_hash),
@@ -234,6 +260,8 @@ impl Job {
             target: hex32(&template.target)?,
             extranonce2_size: chain.extranonce2_size(),
             tx_data,
+            mweb,
+            aux,
             work,
             seen: Mutex::new(HashSet::new()),
         })
@@ -290,7 +318,7 @@ impl Job {
 
         let claimed = kawpow::final_hash(self.height, expected, mix_hash, nonce);
         if difficulty_of(&claimed) < floor && claimed > self.target {
-            return Ok(Share { difficulty: difficulty_of(&claimed), block: None });
+            return Ok(Share { difficulty: difficulty_of(&claimed), block: None, aux_block: None });
         }
         let pow = epoch.hash(self.height, expected, nonce);
         if pow.mix_hash != *mix_hash {
@@ -315,7 +343,7 @@ impl Job {
                 hex: hex::encode(raw),
             }
         });
-        Ok(Share { difficulty: difficulty_of(&pow.final_hash), block })
+        Ok(Share { difficulty: difficulty_of(&pow.final_hash), block, aux_block: None })
     }
 
     /// Rebuilds what a miner claims to have hashed and scores it.
@@ -339,6 +367,7 @@ impl Job {
         }
 
         // `block_start` is everything that precedes the transaction list in the serialized block.
+        let mut aux_block = None;
         let (pow, header_hash, block_start, coinbase) = match &self.work {
             Work::Bitcoin { version, prev_hash, nbits, coinb1, coinb2, branches } => {
                 let coinbase = [&coinb1[..], &extranonce, coinb2].concat();
@@ -351,6 +380,15 @@ impl Job {
                 header[72..76].copy_from_slice(&nbits.to_le_bytes());
                 header[76..80].copy_from_slice(&nonce.to_le_bytes());
                 let pow = algo.hash(&header);
+                if let Some(aux) = self.aux.as_ref().filter(|aux| aux.solved_by(&pow)) {
+                    aux_block = Some(FoundBlock {
+                        hash: hex::encode(aux.hash),
+                        height: aux.height,
+                        reward: aux.reward,
+                        network_difficulty: aux.network_difficulty,
+                        hex: hex::encode(merged::auxpow(&coinbase, branches, &header)),
+                    });
+                }
                 let block_id = if algo.block_id_is_pow_hash() { pow } else { sha256d(&header) };
                 (pow, block_id, header.to_vec(), coinbase)
             }
@@ -384,6 +422,11 @@ impl Job {
             write_varint(&mut raw, 1 + self.tx_data.len() as u64);
             raw.extend_from_slice(&coinbase);
             self.tx_data.iter().for_each(|tx| raw.extend_from_slice(tx));
+            if let Some(mweb) = &self.mweb {
+                // An optional field: a flag byte, then the extension block as the daemon gave it.
+                raw.push(1);
+                raw.extend_from_slice(mweb);
+            }
             let mut hash = header_hash;
             hash.reverse();
             let mut target_le = self.target;
@@ -397,7 +440,7 @@ impl Job {
             }
         });
 
-        Ok(Share { difficulty: hash_difficulty(&pow) * algo.diff_multiplier(), block })
+        Ok(Share { difficulty: hash_difficulty(&pow) * algo.diff_multiplier(), block, aux_block })
     }
 }
 
@@ -661,6 +704,48 @@ pub mod tests {
         assert_eq!(job.check_kawpow(&en1, nonce + 1, &header_hash, &[7; 32], 0.0).err(), Some(ShareError::BadMixHash));
         assert!(job.check_kawpow(&en1, nonce, &header_hash, &mix, 0.0).is_ok());
         assert_eq!(job.check_kawpow(&en1, nonce, &header_hash, &mix, 0.0).err(), Some(ShareError::Duplicate));
+    }
+
+    #[test]
+    fn merged_block_is_committed_to_and_proven() {
+        let template = easy_template(2);
+        let aux = Arc::new(AuxWork::for_test([0x5a; 32], [0xff; 32]));
+        let job = Job::with_aux("1".into(), Chain::Bitcoin, 0, &template, &[0x51], true, Some(aux)).unwrap();
+        let share = job.check_share(Algo::Scrypt, &[0, 0, 0, 1], &[0, 0, 0, 2], template.curtime, 7).unwrap();
+        let found = share.aux_block.expect("easy aux target");
+        assert_eq!((found.hash.as_str(), found.height, found.reward), ("5a".repeat(32).as_str(), 700, 9));
+
+        let Work::Bitcoin { coinb1, coinb2, branches, .. } = &job.work else { panic!("bitcoin job") };
+        let coinbase = [&coinb1[..], &[0, 0, 0, 1, 0, 0, 0, 2], coinb2].concat();
+        let commitment = [&[0xfa, 0xbe, b'm', b'm'][..], &[0x5a; 32], &[1, 0, 0, 0, 0, 0, 0, 0]].concat();
+        assert_eq!(coinbase.windows(44).filter(|w| *w == commitment).count(), 1);
+        assert_eq!(coinbase[41] as usize, coinbase.len() - 42 - coinb2.len() + 1 + COINBASE_TAG.len() + 44, "script length");
+
+        // The proof: coinbase, a hash nobody reads, the coinbase's merkle branch, and the header.
+        let proof = hex::decode(found.hex).unwrap();
+        let block = hex::decode(share.block.unwrap().hex).unwrap();
+        assert!(proof.starts_with(&coinbase));
+        assert_eq!(proof[coinbase.len() + 32] as usize, branches.len());
+        assert!(proof.ends_with(&block[..80]));
+
+        // The merged chain takes a block once: a second solution is an ordinary share.
+        assert!(job.check_share(Algo::Scrypt, &[0, 0, 0, 1], &[0; 4], template.curtime, 8).unwrap().aux_block.is_none());
+
+        // Without an easy target the same share is no block of the merged chain.
+        let hard = Arc::new(AuxWork::for_test([0x5a; 32], [0; 32]));
+        let job = Job::with_aux("2".into(), Chain::Bitcoin, 0, &template, &[0x51], true, Some(hard)).unwrap();
+        assert!(job.check_share(Algo::Scrypt, &[0; 4], &[0; 4], template.curtime, 7).unwrap().aux_block.is_none());
+    }
+
+    #[test]
+    fn mweb_block_follows_the_transactions() {
+        let mut template = easy_template(1);
+        template.mweb = Some("c0ffee".into());
+        let job = Job::new("1".into(), Chain::Bitcoin, 0, &template, &[0x51], true).unwrap();
+        let share = job.check_share(Algo::Scrypt, &[0; 4], &[0; 4], template.curtime, 7).unwrap();
+        let raw = hex::decode(share.block.unwrap().hex).unwrap();
+        assert!(raw.ends_with(&[1, 0xc0, 0xff, 0xee]), "a flag byte, then the extension block");
+        assert!(Job::new("2".into(), Chain::Xaya, 0, &template, &[0x51], true).is_err());
     }
 
     #[test]

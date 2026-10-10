@@ -64,6 +64,21 @@ pub fn hash_difficulty(hash_le: &[u8; 32]) -> f64 {
     diff1 / value
 }
 
+/// Expands a compact target ("bits") to the full big-endian number.
+pub fn target_from_bits(bits: u32) -> [u8; 32] {
+    let mut target = [0u8; 32];
+    let size = (bits >> 24) as usize;
+    let mantissa = bits & 0x007f_ffff;
+    for i in 0..3 {
+        // The mantissa's most significant byte sits `size` bytes from the end.
+        let position = 32usize.wrapping_sub(size).wrapping_add(i);
+        if position < 32 {
+            target[position] = (mantissa >> (8 * (2 - i))) as u8;
+        }
+    }
+    target
+}
+
 /// The largest hash, as a big-endian number, that still has `difficulty`. For miners
 /// that are told a target instead of a difficulty.
 pub fn target_for_difficulty(difficulty: f64) -> [u8; 32] {
@@ -88,6 +103,13 @@ pub fn target_for_difficulty(difficulty: f64) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_targets_expand() {
+        assert_eq!(hex::encode(target_from_bits(0x1d00ffff)), format!("00000000ffff{}", "0".repeat(52)));
+        assert_eq!(hex::encode(target_from_bits(0x207fffff)), format!("7fffff{}", "0".repeat(58)));
+        assert_eq!(hex::encode(target_from_bits(0x03123456)), format!("{}123456", "0".repeat(58)));
+    }
 
     #[test]
     fn targets_round_trip_through_difficulty() {
