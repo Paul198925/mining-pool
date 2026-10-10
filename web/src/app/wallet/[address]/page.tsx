@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { HashrateChart } from "@/components/hashrate-chart";
 import { WalletSearch } from "@/components/miner-search";
+import { RememberWallet } from "@/components/saved-wallets";
 import { BlockStatus, Box, Empty, Skeleton } from "@/components/ui";
 import { formatAge, formatAmount, formatHashrate, shorten } from "@/lib/format";
 import { getMiner, isPlausibleAddress, type MinerAccount } from "@/lib/queries";
@@ -33,6 +34,8 @@ async function Wallet({ params }: Pick<PageProps<"/wallet/[address]">, "params">
       <div className="column">
         <Box title="YOUR WALLET">
           <WalletSearch initial={address} />
+          {/* Only addresses the pool knows: a typo should not end up in the visitor's list. */}
+          {accounts.length > 0 && <RememberWallet address={address} />}
         </Box>
         <Box title={<>Wallet: {address}</>}>
           {accounts.length === 0 ? (
