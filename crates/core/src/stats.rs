@@ -6,10 +6,14 @@ use pool_common::{
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
-/// Makes the coin's payout settings visible to the website.
+/// Makes the coin's payout settings visible to the website. Fees and the minimum payout
+/// from the config file are only starting values: after that the admin area owns them.
 pub async fn publish_settings(db: &PgPool, coin_id: i32, coin: &Coin, accounting: &Accounting) -> Result<()> {
     sqlx::query(
-        "UPDATE coins SET block_maturity = $2, min_payout = $3, pool_fee_percent = $4, solo_fee_percent = $5 WHERE id = $1",
+        "UPDATE coins SET block_maturity = $2, min_payout = COALESCE(min_payout, $3),
+                          pool_fee_percent = COALESCE(pool_fee_percent, $4),
+                          solo_fee_percent = COALESCE(solo_fee_percent, $5)
+         WHERE id = $1",
     )
     .bind(coin_id)
     .bind(coin.block_maturity as i32)

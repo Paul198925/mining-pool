@@ -1,6 +1,6 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use pool_common::{
-    config::{Accounting, Coin},
+    config::Coin,
     rpc::RpcClient,
 };
 use serde_json::{Value, json};
@@ -19,7 +19,7 @@ const CREDIT_DELAY_SECS: f64 = 5.0;
 /// The window is that group's most recent shares before the block, going back until their
 /// difficulties add up to `pplns_factor` times the network difficulty. The oldest
 /// share in the window only counts with the part that still fits.
-pub async fn credit_new_blocks(db: &PgPool, coin_id: i32, accounting: &Accounting) -> Result<()> {
+pub async fn credit_new_blocks(db: &PgPool, coin_id: i32, pplns_factor: f64) -> Result<()> {
     let blocks: Vec<(i64, i64, i64, f64, bool, i64)> = sqlx::query_as(
         "SELECT id, height, reward, network_difficulty, solo, account_id FROM blocks
          WHERE coin_id = $1 AND status = 'pending' AND NOT credited
@@ -31,9 +31,23 @@ pub async fn credit_new_blocks(db: &PgPool, coin_id: i32, accounting: &Accountin
     .fetch_all(db)
     .await?;
 
+    if blocks.is_empty() {
+        return Ok(());
+    }
+    // Read for every round: the fees can be changed in the admin area while the pool runs.
+    let (pool_fee_percent, solo_fee_percent): (Option<f64>, Option<f64>) =
+        sqlx::query_as("SELECT pool_fee_percent, solo_fee_percent FROM coins WHERE id = $1")
+            .bind(coin_id)
+            .fetch_one(db)
+            .await?;
+    let (pool_fee_percent, solo_fee_percent) = (
+        pool_fee_percent.context("the coin has no pool fee set")?,
+        solo_fee_percent.context("the coin has no solo fee set")?,
+    );
+
     for (block_id, height, reward, network_difficulty, solo, finder) in blocks {
         if solo {
-            let credits = split_reward(reward, accounting.solo_fee_percent, &[(finder, 1.0)]);
+            let credits = split_reward(reward, solo_fee_percent, &[(finder, 1.0)]);
             store_credits(db, block_id, &credits).await?;
             info!(height, "solo block reward credited");
             continue;
@@ -53,11 +67,11 @@ pub async fn credit_new_blocks(db: &PgPool, coin_id: i32, accounting: &Accountin
         )
         .bind(coin_id)
         .bind(block_id)
-        .bind(accounting.pplns_factor * network_difficulty)
+        .bind(pplns_factor * network_difficulty)
         .fetch_all(db)
         .await?;
 
-        let credits = split_reward(reward, accounting.pool_fee_percent, &weights);
+        let credits = split_reward(reward, pool_fee_percent, &weights);
         store_credits(db, block_id, &credits).await?;
         info!(height, miners = credits.len(), "block reward split");
     }

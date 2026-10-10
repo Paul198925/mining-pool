@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use pool_common::{
     config::Coin,
     rpc::{DaemonError, RpcClient},
@@ -27,7 +27,7 @@ const RECONCILE_LOOKBACK: u32 = 1000;
 /// between the recipients, so the pool never pays for payouts.
 pub async fn run(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result<()> {
     reconcile(db, rpc, coin_id).await?;
-    create(db, coin_id, coin).await?;
+    create(db, coin_id).await?;
     send(db, rpc, coin_id, coin).await
 }
 
@@ -67,8 +67,11 @@ async fn reconcile(db: &PgPool, rpc: &RpcClient, coin_id: i32) -> Result<()> {
 }
 
 /// Turns every balance above the minimum into a pending payout, debiting the ledger.
-async fn create(db: &PgPool, coin_id: i32, coin: &Coin) -> Result<()> {
-    let min_units = ((coin.min_payout * UNITS_PER_COIN as f64).round() as i64).max(1);
+async fn create(db: &PgPool, coin_id: i32) -> Result<()> {
+    // Read for every round: the minimum can be changed in the admin area while the pool runs.
+    let min_units: Option<i64> =
+        sqlx::query_scalar("SELECT min_payout FROM coins WHERE id = $1").bind(coin_id).fetch_one(db).await?;
+    let min_units = min_units.context("the coin has no minimum payout set")?.max(1);
     let mut tx = db.begin().await?;
     let due: Vec<(i64, i64, String)> = sqlx::query_as(
         "SELECT b.account_id, b.amount, a.payout_address

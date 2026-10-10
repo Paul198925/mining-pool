@@ -32,8 +32,9 @@ async fn main() -> Result<()> {
     info!("database ready");
 
     // A coin that is no longer configured stays in the books but leaves the website.
+    // Never switched back on here: an admin may have switched a coin off on purpose.
     let symbols: Vec<&str> = cfg.coins.iter().map(|coin| coin.symbol.as_str()).collect();
-    sqlx::query("UPDATE coins SET enabled = (symbol = ANY($1))").bind(&symbols).execute(&db).await?;
+    sqlx::query("UPDATE coins SET enabled = FALSE WHERE NOT (symbol = ANY($1))").bind(&symbols).execute(&db).await?;
 
     for coin in &cfg.coins {
         let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
@@ -78,7 +79,7 @@ async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) 
         if let Err(err) = stats::refresh_wallet_balance(&db, &rpc, coin_id).await {
             warn!(coin = %coin.symbol, "reading the wallet balance failed: {err:#}");
         }
-        if let Err(err) = blocks::credit_new_blocks(&db, coin_id, &accounting).await {
+        if let Err(err) = blocks::credit_new_blocks(&db, coin_id, accounting.pplns_factor).await {
             error!(coin = %coin.symbol, "crediting blocks failed: {err:#}");
         }
         if let Err(err) = blocks::update_confirmations(&db, &rpc, coin_id, &coin).await {
