@@ -1,0 +1,12 @@
+[package]
+name = "pool-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+pool-common.workspace = true
+anyhow.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true

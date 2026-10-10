@@ -1,0 +1,6 @@
+/target
+/reference
+.env
+.env.*
+!.env.example
+config/*.local.toml

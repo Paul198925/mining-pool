@@ -1,0 +1,67 @@
+# Local development only. Everything binds to loopback on non-default ports
+# so it does not collide with other projects on this machine.
+name: pool-dev
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg17
+    environment:
+      POSTGRES_USER: pool
+      POSTGRES_PASSWORD: pooldev
+      POSTGRES_DB: pool
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pool -d pool"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "127.0.0.1:56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Regtest: a private chain with instant blocks, no sync and no real coins.
+  dogecoin:
+    build: docker/dogecoin
+    platform: linux/amd64
+    command:
+      - -regtest
+      - -server
+      - -listen=0
+      - -txindex
+      - -addnode=dogecoin-peer
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcport=18332
+      - -rpcuser=pool
+      - -rpcpassword=pooldev
+    ports:
+      - "127.0.0.1:18332:18332"
+    volumes:
+      - dogecoin:/data
+    healthcheck:
+      test: ["CMD", "dogecoin-cli", "-regtest", "-rpcport=18332", "-rpcuser=pool", "-rpcpassword=pooldev", "getblockcount"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # getblocktemplate refuses to work without at least one connected peer.
+  dogecoin-peer:
+    build: docker/dogecoin
+    platform: linux/amd64
+    command:
+      - -regtest
+      - -listen=1
+
+volumes:
+  pgdata:
+  dogecoin:

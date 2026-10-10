@@ -1,0 +1,19 @@
+# Local development against docker-compose.yml. These credentials only exist
+# on loopback-bound dev containers; production values never go in this repo.
+
+[database]
+url = "postgres://pool:pooldev@127.0.0.1:55432/pool"
+
+[redis]
+url = "redis://127.0.0.1:56379"
+
+[stratum]
+listen = "127.0.0.1:3333"
+
+[[coins]]
+symbol = "DOGE"
+name = "Dogecoin"
+algo = "scrypt"
+rpc_url = "http://127.0.0.1:18332"
+rpc_user = "pool"
+rpc_password = "pooldev"
