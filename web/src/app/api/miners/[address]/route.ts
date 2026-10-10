@@ -20,6 +20,7 @@ export async function GET(_request: NextRequest, context: RouteContext<"/api/min
       workers: account.workers,
       payouts: account.payouts.map((payout) => ({
         amount: unitsToDecimal(payout.amount),
+        networkFee: payout.networkFee === null ? null : unitsToDecimal(payout.networkFee),
         status: payout.status,
         txid: payout.txid,
         createdAt: payout.createdAt,

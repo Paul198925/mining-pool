@@ -89,6 +89,7 @@ function Account({ account }: { account: MinerAccount }) {
               <thead>
                 <tr className="border-b border-border">
                   <th className={`${th} text-right`}>Amount</th>
+                  <th className={`${th} text-right`}>Tx fee</th>
                   <th className={th}>Status</th>
                   <th className={th}>Transaction</th>
                   <th className={`${th} text-right`}>Created</th>
@@ -98,6 +99,9 @@ function Account({ account }: { account: MinerAccount }) {
                 {account.payouts.map((payout) => (
                   <tr key={payout.id} className="border-b border-border last:border-0">
                     <td className={`${td} text-right font-mono`}>{formatAmount(payout.amount, 4)}</td>
+                    <td className={`${td} text-right font-mono text-muted`}>
+                      {payout.networkFee === null ? "–" : formatAmount(payout.networkFee, 4)}
+                    </td>
                     <td className={td}>{payout.status === "sent" ? "Sent" : "Queued"}</td>
                     <td className={`${td} font-mono text-muted`} title={payout.txid ?? undefined}>
                       {payout.txid ? shorten(payout.txid) : "–"}

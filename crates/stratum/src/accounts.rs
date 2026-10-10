@@ -7,11 +7,20 @@ use sqlx::PgPool;
 pub struct WorkerIds {
     pub account_id: i64,
     pub worker_id: i64,
+    /// The miner opted out of PPLNS for this connection.
+    pub solo: bool,
 }
 
-/// Resolves a stratum username of the form `<payout address>[.<worker name>]`.
+/// Resolves a stratum login. The username is `<payout address>[.<worker name>]`; the password
+/// carries comma-separated options as in Yiimp, of which `m=solo` is understood.
 /// Returns `None` if the address is not valid for the coin.
-pub async fn resolve(db: &PgPool, rpc: &RpcClient, coin_id: i32, user: &str) -> Result<Option<WorkerIds>> {
+pub async fn resolve(
+    db: &PgPool,
+    rpc: &RpcClient,
+    coin_id: i32,
+    user: &str,
+    password: &str,
+) -> Result<Option<WorkerIds>> {
     let (address, worker) = user.split_once('.').unwrap_or((user, ""));
     // Cheap rejection of junk before asking the daemon.
     let plausible = (20..=100).contains(&address.len()) && address.chars().all(|c| c.is_ascii_alphanumeric());
@@ -41,5 +50,23 @@ pub async fn resolve(db: &PgPool, rpc: &RpcClient, coin_id: i32, user: &str) -> 
     .bind(worker)
     .fetch_one(db)
     .await?;
-    Ok(Some(WorkerIds { account_id, worker_id }))
+    Ok(Some(WorkerIds { account_id, worker_id, solo: wants_solo(password) }))
+}
+
+fn wants_solo(password: &str) -> bool {
+    password.split(',').any(|option| option.trim().eq_ignore_ascii_case("m=solo"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn solo_is_an_explicit_password_option() {
+        assert!(wants_solo("m=solo"));
+        assert!(wants_solo("c=DOGE, M=SOLO"));
+        assert!(!wants_solo("x"));
+        assert!(!wants_solo(""));
+        assert!(!wants_solo("m=solo2"));
+    }
 }

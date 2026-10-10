@@ -19,6 +19,7 @@ export type Coin = {
   /** Base units (1e-8 coin) as a decimal string. */
   minPayout: string | null;
   poolFeePercent: number | null;
+  soloFeePercent: number | null;
   hashrate: number;
   miners: number;
   workers: number;
@@ -37,6 +38,7 @@ export type Block = {
   reward: string;
   networkDifficulty: number;
   finder: string;
+  solo: boolean;
   foundAt: Date;
 };
 
@@ -44,7 +46,15 @@ export type HashratePoint = { t: string; v: number };
 
 export type Worker = { name: string; hashrate: number; lastShareAt: Date | null };
 
-export type Payout = { id: string; amount: string; status: string; txid: string | null; createdAt: Date };
+export type Payout = {
+  id: string;
+  amount: string;
+  /** Transaction fee taken out of `amount`; null until the payout is sent. */
+  networkFee: string | null;
+  status: string;
+  txid: string | null;
+  createdAt: Date;
+};
 
 export type Credit = { height: number; status: Block["status"]; amount: string; foundAt: Date };
 
@@ -65,7 +75,7 @@ export async function getCoins(): Promise<Coin[]> {
   await connection();
   const { rows } = await db().query(
     `SELECT c.symbol, c.name, c.algo, c.height, c.network_difficulty, c.network_hashrate, c.stratum_port,
-            c.block_maturity, c.min_payout, c.pool_fee_percent,
+            c.block_maturity, c.min_payout, c.pool_fee_percent, c.solo_fee_percent,
             COALESCE(live.difficulty, 0) * $1 / $2 AS hashrate,
             COALESCE(live.miners, 0) AS miners, COALESCE(live.workers, 0) AS workers,
             (SELECT count(*) FROM blocks b WHERE b.coin_id = c.id AND b.status <> 'orphaned') AS blocks_found,
@@ -90,6 +100,7 @@ export async function getCoins(): Promise<Coin[]> {
     blockMaturity: r.block_maturity,
     minPayout: r.min_payout,
     poolFeePercent: r.pool_fee_percent,
+    soloFeePercent: r.solo_fee_percent,
     hashrate: r.hashrate,
     miners: Number(r.miners),
     workers: Number(r.workers),
@@ -102,7 +113,7 @@ export async function getBlocks(limit: number): Promise<Block[]> {
   await connection();
   const { rows } = await db().query(
     `SELECT b.id, c.symbol, b.height, b.hash, b.status, b.confirmations, c.block_maturity, b.reward,
-            b.network_difficulty, a.payout_address AS finder, b.found_at
+            b.network_difficulty, a.payout_address AS finder, b.solo, b.found_at
      FROM blocks b JOIN coins c ON c.id = b.coin_id JOIN accounts a ON a.id = b.account_id
      ORDER BY b.found_at DESC, b.id DESC
      LIMIT $1`,
@@ -119,6 +130,7 @@ export async function getBlocks(limit: number): Promise<Block[]> {
     reward: r.reward,
     networkDifficulty: r.network_difficulty,
     finder: r.finder,
+    solo: r.solo,
     foundAt: r.found_at,
   }));
 }
@@ -183,7 +195,7 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
           [id, HASHES_PER_DIFF, LIVE_WINDOW_SECS],
         ),
         db().query(
-          `SELECT id, amount, status, txid, created_at FROM payouts WHERE account_id = $1 ORDER BY id DESC LIMIT 20`,
+          `SELECT id, amount, network_fee, status, txid, created_at FROM payouts WHERE account_id = $1 ORDER BY id DESC LIMIT 20`,
           [id],
         ),
         db().query(
@@ -208,6 +220,7 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
         payouts: payouts.rows.map((r) => ({
           id: r.id,
           amount: r.amount,
+          networkFee: r.network_fee,
           status: r.status,
           txid: r.txid,
           createdAt: r.created_at,

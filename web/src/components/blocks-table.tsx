@@ -43,6 +43,7 @@ export function BlocksTable({ blocks }: { blocks: Block[] }) {
                 <Link href={`/miner/${block.finder}`} className="hover:text-accent">
                   {shorten(block.finder)}
                 </Link>
+                {block.solo && <span className="ml-2 rounded border border-border px-1 font-sans text-xs text-muted">solo</span>}
               </td>
               <td className={`${td} font-mono text-muted`} title={block.hash}>
                 {shorten(block.hash)}

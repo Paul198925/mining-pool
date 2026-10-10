@@ -8,13 +8,16 @@ use sqlx::PgPool;
 
 /// Makes the coin's payout settings visible to the website.
 pub async fn publish_settings(db: &PgPool, coin_id: i32, coin: &Coin, accounting: &Accounting) -> Result<()> {
-    sqlx::query("UPDATE coins SET block_maturity = $2, min_payout = $3, pool_fee_percent = $4 WHERE id = $1")
-        .bind(coin_id)
-        .bind(coin.block_maturity as i32)
-        .bind((coin.min_payout * 1e8).round() as i64)
-        .bind(accounting.pool_fee_percent)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "UPDATE coins SET block_maturity = $2, min_payout = $3, pool_fee_percent = $4, solo_fee_percent = $5 WHERE id = $1",
+    )
+    .bind(coin_id)
+    .bind(coin.block_maturity as i32)
+    .bind((coin.min_payout * 1e8).round() as i64)
+    .bind(accounting.pool_fee_percent)
+    .bind(accounting.solo_fee_percent)
+    .execute(db)
+    .await?;
     Ok(())
 }
 

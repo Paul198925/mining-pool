@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
       reward: unitsToDecimal(block.reward),
       networkDifficulty: block.networkDifficulty,
       finder: block.finder,
+      solo: block.solo,
       foundAt: block.foundAt,
     })),
   });

@@ -15,6 +15,7 @@ const BLOCK_INSERT_ATTEMPTS: u32 = 10;
 pub struct ShareEvent {
     pub account_id: i64,
     pub worker_id: i64,
+    pub solo: bool,
     /// In diff-1 units, i.e. already divided by the algo's stratum multiplier.
     pub difficulty: f64,
     /// Unix time in seconds.
@@ -25,6 +26,7 @@ pub struct ShareEvent {
 pub struct BlockEvent {
     pub account_id: i64,
     pub worker_id: i64,
+    pub solo: bool,
     pub height: u64,
     pub hash: String,
     pub reward: u64,
@@ -106,15 +108,17 @@ async fn flush(db: &PgPool, coin_id: i32, shares: &mut Vec<ShareEvent>) {
         return;
     }
     let result = sqlx::query(
-        "INSERT INTO shares (coin_id, account_id, worker_id, difficulty, created_at)
-         SELECT $1, s.account_id, s.worker_id, s.difficulty, to_timestamp(s.at)
-         FROM UNNEST($2::int8[], $3::int8[], $4::float8[], $5::float8[]) AS s (account_id, worker_id, difficulty, at)",
+        "INSERT INTO shares (coin_id, account_id, worker_id, difficulty, created_at, solo)
+         SELECT $1, s.account_id, s.worker_id, s.difficulty, to_timestamp(s.at), s.solo
+         FROM UNNEST($2::int8[], $3::int8[], $4::float8[], $5::float8[], $6::bool[])
+              AS s (account_id, worker_id, difficulty, at, solo)",
     )
     .bind(coin_id)
     .bind(shares.iter().map(|s| s.account_id).collect::<Vec<_>>())
     .bind(shares.iter().map(|s| s.worker_id).collect::<Vec<_>>())
     .bind(shares.iter().map(|s| s.difficulty).collect::<Vec<_>>())
     .bind(shares.iter().map(|s| s.at).collect::<Vec<_>>())
+    .bind(shares.iter().map(|s| s.solo).collect::<Vec<_>>())
     .execute(db)
     .await;
     match result {
@@ -134,8 +138,8 @@ async fn flush(db: &PgPool, coin_id: i32, shares: &mut Vec<ShareEvent>) {
 async fn insert_block(db: &PgPool, coin_id: i32, block: &BlockEvent) {
     for attempt in 1..=BLOCK_INSERT_ATTEMPTS {
         let result = sqlx::query(
-            "INSERT INTO blocks (coin_id, height, hash, account_id, worker_id, reward, network_difficulty, found_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8))
+            "INSERT INTO blocks (coin_id, height, hash, account_id, worker_id, reward, network_difficulty, found_at, solo)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9)
              ON CONFLICT (coin_id, hash) DO NOTHING",
         )
         .bind(coin_id)
@@ -146,6 +150,7 @@ async fn insert_block(db: &PgPool, coin_id: i32, block: &BlockEvent) {
         .bind(block.reward as i64)
         .bind(block.network_difficulty)
         .bind(block.at)
+        .bind(block.solo)
         .execute(db)
         .await;
         match result {

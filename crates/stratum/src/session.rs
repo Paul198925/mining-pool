@@ -47,6 +47,7 @@ pub struct AcceptedShare {
 pub struct AuthRequest {
     id: Value,
     pub user: String,
+    pub password: String,
 }
 
 /// Per-connection Stratum V1 state. Pure request/response logic, no I/O.
@@ -102,7 +103,10 @@ impl Session {
             }
             // Username is "<payout address>[.<worker name>]"; checking it needs the daemon and database.
             "mining.authorize" => match req.params.first().and_then(Value::as_str).map(str::trim) {
-                Some(user) if !user.is_empty() => out.auth = Some(AuthRequest { id: req.id, user: user.to_owned() }),
+                Some(user) if !user.is_empty() => {
+                    let password = req.params.get(1).and_then(Value::as_str).unwrap_or_default().to_owned();
+                    out.auth = Some(AuthRequest { id: req.id, user: user.to_owned(), password });
+                }
                 _ => out.lines.push(error(req.id, ERR_UNAUTHORIZED, "Unauthorized worker")),
             },
             "mining.extranonce.subscribe" => out.lines.push(ok(req.id, json!(true))),
@@ -221,11 +225,11 @@ mod tests {
 
     const SUBSCRIBE: &str = r#"{"id":1,"method":"mining.subscribe","params":["cpuminer/2.5"]}"#;
     const AUTHORIZE: &str = r#"{"id":2,"method":"mining.authorize","params":["addr.rig1","x"]}"#;
-    const WORKER: WorkerIds = WorkerIds { account_id: 7, worker_id: 8 };
+    const WORKER: WorkerIds = WorkerIds { account_id: 7, worker_id: 8, solo: false };
 
     fn authorize(s: &mut Session) {
         let request = s.handle_line(AUTHORIZE, None, Instant::now()).auth.expect("auth request");
-        assert_eq!(request.user, "addr.rig1");
+        assert_eq!((request.user.as_str(), request.password.as_str()), ("addr.rig1", "x"));
         assert_eq!(parse(&s.finish_authorize(request, Some(WORKER)))["result"], true);
     }
 

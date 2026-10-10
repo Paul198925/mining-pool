@@ -55,6 +55,8 @@ docker compose exec dogecoin dogecoin-cli -regtest -rpcport=18332 -rpcuser=pool 
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner
 ```
 
+Solo-Mining wählt der Miner über das Passwort: `MINER_PASSWORD=m=solo` vor denselben Befehl setzen.
+
 Block-Belohnungen werden erst nach 60 Bestätigungen gutgeschrieben und ausgezahlt. Auf Regtest erzeugt man die Bestätigungen mit `generate 61`.
 
 Das Dashboard liest direkt aus der Datenbank. Ohne `DATABASE_URL` nutzt es im Entwicklungsmodus die lokale Dev-Datenbank; `POOL_STRATUM_HOST` setzt den Hostnamen, der Minern als Stratum-Adresse angezeigt wird.

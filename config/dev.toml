@@ -18,6 +18,7 @@ share_target_secs = 15.0
 [accounting]
 pplns_factor = 2.0
 pool_fee_percent = 1.0
+solo_fee_percent = 1.0
 payout_interval_secs = 30
 
 [[coins]]

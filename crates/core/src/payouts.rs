@@ -20,6 +20,9 @@ const RECONCILE_LOOKBACK: u32 = 1000;
 ///    or lose the connection here, the next round looks the batch up in the wallet by
 ///    its comment instead of sending again blindly.
 /// 3. `sent`: the transaction id is recorded.
+///
+/// The wallet takes the transaction fee out of the amounts it sends, split evenly
+/// between the recipients, so the pool never pays for payouts.
 pub async fn run(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result<()> {
     reconcile(db, rpc, coin_id).await?;
     create(db, coin_id, coin).await?;
@@ -127,7 +130,9 @@ async fn send(db: &PgPool, rpc: &RpcClient, coin_id: i32) -> Result<()> {
         pending.iter().map(|(_, address, amount)| (address.clone(), json!(format_amount(*amount)))).collect();
     let total: i64 = pending.iter().map(|(.., amount)| amount).sum();
 
-    match rpc.call::<String>("sendmany", json!(["", amounts, 1, batch_comment(batch_id)])).await {
+    // The last argument lists the outputs the fee is subtracted from: all of them.
+    let recipients: Vec<&String> = amounts.keys().collect();
+    match rpc.call::<String>("sendmany", json!(["", amounts, 1, batch_comment(batch_id), recipients])).await {
         Ok(txid) => {
             info!(batch_id, %txid, payouts = pending.len(), total = %format_amount(total), "payouts sent");
             mark_sent(db, rpc, coin_id, batch_id, &txid).await
@@ -161,18 +166,28 @@ async fn mark_sent(db: &PgPool, rpc: &RpcClient, coin_id: i32, batch_id: i64, tx
     Ok(())
 }
 
-/// The pool pays the transaction fee out of its fee income.
+/// Records what the miners actually received: the fee moves from 'paid_out' to 'network_fee'.
 async fn book_network_fee(db: &PgPool, rpc: &RpcClient, coin_id: i32, txid: &str) -> Result<()> {
     let tx: Value = rpc.call("gettransaction", json!([txid])).await?;
-    let fee = (tx["fee"].as_f64().unwrap_or(0.0).abs() * UNITS_PER_COIN as f64).round() as i64;
+    let to_units = |coins: &Value| (coins.as_f64().unwrap_or(0.0).abs() * UNITS_PER_COIN as f64).round() as i64;
+    let fee = to_units(&tx["fee"]);
     if fee == 0 {
         return Ok(());
+    }
+    // Per payout: what was debited minus what the wallet says it sent to that address.
+    for detail in tx["details"].as_array().into_iter().flatten().filter(|d| d["category"] == "send") {
+        sqlx::query("UPDATE payouts SET network_fee = amount - $3 WHERE txid = $1 AND address = $2")
+            .bind(txid)
+            .bind(detail["address"].as_str())
+            .bind(to_units(&detail["amount"]))
+            .execute(db)
+            .await?;
     }
     sqlx::query(
         "WITH transfer AS (SELECT nextval('ledger_transfer_id') AS id)
          INSERT INTO ledger_entries (transfer_id, coin_id, system_account, amount, kind)
          SELECT transfer.id, $1, legs.system_account, legs.amount, 'network_fee'
-         FROM transfer, (VALUES ('pool_fee', -$2::bigint), ('network_fee', $2)) AS legs (system_account, amount)",
+         FROM transfer, (VALUES ('paid_out', -$2::bigint), ('network_fee', $2)) AS legs (system_account, amount)",
     )
     .bind(coin_id)
     .bind(fee)

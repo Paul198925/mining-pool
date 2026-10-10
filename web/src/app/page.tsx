@@ -79,12 +79,16 @@ async function CoinCard({ coin }: { coin: Coin }) {
               Your {coin.symbol} address, optionally followed by <span className="font-mono">.workername</span>
             </dd>
             <dt className="text-muted">Password</dt>
-            <dd className="font-mono">x</dd>
+            <dd>
+              <span className="font-mono">x</span>, or <span className="font-mono">m=solo</span> to mine solo: you keep
+              every block you find ({coin.soloFeePercent ?? "–"}% fee) and get nothing from other miners&apos; blocks
+            </dd>
             <dt className="text-muted">Payouts</dt>
             <dd>
               PPLNS, {coin.poolFeePercent ?? "–"}% fee, paid automatically from{" "}
               {coin.minPayout === null ? "–" : formatAmount(coin.minPayout, 2)} {coin.symbol} once a block has{" "}
-              {coin.blockMaturity === null ? "–" : coin.blockMaturity + 1} confirmations
+              {coin.blockMaturity === null ? "–" : coin.blockMaturity + 1} confirmations. The transaction fee is
+              shared by the miners in each payout.
             </dd>
           </dl>
         )}

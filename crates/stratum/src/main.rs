@@ -30,6 +30,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    accounts::WorkerIds,
     algo::Algo,
     job::{FoundBlock, Job},
     pool::Pool,
@@ -147,7 +148,7 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
                     record_share(&ctx, share);
                 }
                 if let Some(request) = out.auth {
-                    let worker = accounts::resolve(&ctx.db, &ctx.rpc, ctx.coin_id, &request.user).await;
+                    let worker = accounts::resolve(&ctx.db, &ctx.rpc, ctx.coin_id, &request.user, &request.password).await;
                     let worker = worker.unwrap_or_else(|err| {
                         warn!(%peer, "authorize failed: {err:#}");
                         None
@@ -179,14 +180,16 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
 fn record_share(ctx: &Server, share: AcceptedShare) {
     let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let AcceptedShare { worker, difficulty, block } = share;
-    ctx.recorder.share(ShareEvent { account_id: worker.account_id, worker_id: worker.worker_id, difficulty, at });
+    let WorkerIds { account_id, worker_id, solo } = worker;
+    ctx.recorder.share(ShareEvent { account_id, worker_id, solo, difficulty, at });
     if let Some(block) = block {
         let ctx = ctx.clone();
         tokio::spawn(async move {
             if submit_block(&ctx.rpc, &block).await {
                 let event = BlockEvent {
-                    account_id: worker.account_id,
-                    worker_id: worker.worker_id,
+                    account_id,
+                    worker_id,
+                    solo,
                     height: block.height,
                     hash: block.hash,
                     reward: block.reward,

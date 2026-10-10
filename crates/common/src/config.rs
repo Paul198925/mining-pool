@@ -40,6 +40,8 @@ pub struct Accounting {
     /// PPLNS window as a multiple of the network difficulty.
     pub pplns_factor: f64,
     pub pool_fee_percent: f64,
+    /// Fee on blocks found by solo miners.
+    pub solo_fee_percent: f64,
     pub payout_interval_secs: u64,
 }
 
