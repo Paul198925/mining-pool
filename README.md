@@ -55,7 +55,7 @@ docker compose exec dogecoin dogecoin-cli -regtest -rpcport=18332 -rpcuser=pool 
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner
 ```
 
-Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334, RinHash 3335). Laufen mehrere Coins auf einem Port, erkennt der Server die Coin an der Adresse; mit `c=<SYMBOL>` im Passwort legt der Miner sie selbst fest.
+Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334, RinHash 3335, KawPoW 3336). Laufen mehrere Coins auf einem Port, erkennt der Server die Coin an der Adresse; mit `c=<SYMBOL>` im Passwort legt der Miner sie selbst fest.
 
 Für SpaceXpanse gibt es einen eigenen Test-Miner; die Adresse kommt vom SpaceXpanse-Node:
 
@@ -68,6 +68,14 @@ MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner-xaya
 ```
 
 Rincoin (RinHash, Port 3335) hat ebenfalls einen eigenen Test-Miner, `miner-rin`, mit einer Adresse vom `rincoin`-Node (`rincoin-cli`, RPC-Port 29556).
+
+Ravencoin (KawPoW, Port 3336) wird eigentlich mit Grafikkarten gemint. Zum Testen gibt es einen langsamen CPU-Miner im Repository, der denselben Stratum-Dialekt wie `kawpowminer` spricht:
+
+```bash
+cargo run --release -p pool-stratum --example kawpow_miner -- 127.0.0.1:3336 <Adresse>.rig1
+```
+
+Die Adresse kommt vom `ravencoin`-Node (`raven-cli`, RPC-Port 18766). Auf Ravencoins Regtest-Kette beginnt KawPoW erst im Jahr 2083; der Test-Node läuft deshalb mit einer dorthin gestellten Uhr (`-mocktime`).
 
 Xaya selbst wird nicht mehr unterstützt: Das Projekt hat seine Chain 2025 aufgegeben. Der Blockaufbau heißt im Code weiter `xaya`, weil SpaceXpanse ihn übernommen hat.
 
@@ -133,7 +141,7 @@ Die Web-App braucht dafür zusätzlich:
 | Variable | Inhalt |
 |---|---|
 | `POOL_PUBLIC_URL` | Adresse, unter der die Server den Pool erreichen, z. B. `https://pool.example` |
-| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse`, `...-rincoin` |
+| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse`, `...-rincoin`, `...-ravencoin` |
 | `POOL_ADDRESS_<SYMBOL>` | optional: überschreibt die Adresse, die `pool-core` aus dem Pool-Wallet veröffentlicht |
 | `POOL_NETWORK` | `regtest` nur für Tests, sonst weglassen |
 | `POOL_WIREGUARD` | `off` nur für Tests auf einem einzigen Docker-Host; dann sieht ein Stratum-Dienst nur die Nodes seines eigenen Servers |

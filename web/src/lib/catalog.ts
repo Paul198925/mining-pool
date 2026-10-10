@@ -19,12 +19,14 @@ export type CoinSpec = {
   symbol: string;
   name: string;
   algo: string;
-  chain: "bitcoin" | "xaya";
+  chain: "bitcoin" | "xaya" | "ravencoin";
   /** Image name suffix and compose service name. */
   service: string;
   rpcPort: Record<Network, number>;
   /** Rule sets the node wants named in block-template requests. */
   templateRules?: string[];
+  /** Extra daemon arguments a network needs. */
+  nodeArgs?: Partial<Record<Network, string[]>>;
   blockMaturity: number;
   /** Default until an admin sets another value. */
   minPayout: number;
@@ -61,6 +63,18 @@ export const COINS: CoinSpec[] = [
     templateRules: ["mweb", "segwit"],
     blockMaturity: 100,
     minPayout: 1,
+  },
+  {
+    symbol: "RVN",
+    name: "Ravencoin",
+    algo: "kawpow",
+    chain: "ravencoin",
+    service: "ravencoin",
+    rpcPort: { main: 8766, regtest: 18766 },
+    // On regtest KawPoW only starts in 2083, and a lone node has no peers.
+    nodeArgs: { regtest: ["-mocktime=3582830200", "-bypassdownload"] },
+    blockMaturity: 100,
+    minPayout: 10,
   },
 ];
 

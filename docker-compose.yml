@@ -107,6 +107,31 @@ services:
       timeout: 5s
       retries: 20
 
+  # KawPoW only starts in the year 2083 on Ravencoin's regtest chain, so this node's
+  # clock is set there. -bypassdownload: hand out work without peers.
+  ravencoin:
+    build: docker/ravencoin
+    platform: linux/amd64
+    command:
+      - -regtest
+      - -mocktime=3582830200
+      - -bypassdownload
+      - -listen=0
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcport=18766
+      - -rpcuser=pool
+      - -rpcpassword=pooldev
+    ports:
+      - "127.0.0.1:18766:18766"
+    volumes:
+      - ravencoin:/data
+    healthcheck:
+      test: ["CMD", "raven-cli", "-regtest", "-rpcport=18766", "-rpcuser=pool", "-rpcpassword=pooldev", "getblockcount"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # Test miners, started on demand, e.g.: docker compose --profile miner run --rm miner
   miner:
     build: docker/cpuminer
@@ -128,3 +153,4 @@ volumes:
   dogecoin:
   spacexpanse:
   rincoin:
+  ravencoin:

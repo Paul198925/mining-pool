@@ -52,6 +52,9 @@ jobs:
           - name: dogecoin
             context: docker/dogecoin
             file: docker/dogecoin/Dockerfile
+          - name: ravencoin
+            context: docker/ravencoin
+            file: docker/ravencoin/Dockerfile
           - name: rincoin
             context: docker/rincoin
             file: docker/rincoin/Dockerfile

@@ -36,6 +36,15 @@ min_difficulty = 0.000001
 max_difficulty = 1000000.0
 share_target_secs = 15.0
 
+# Low enough for the CPU test miner (cargo run -p pool-stratum --example kawpow_miner).
+[[stratum]]
+listen = "127.0.0.1:3336"
+algo = "kawpow"
+start_difficulty = 0.0000001
+min_difficulty = 0.000000001
+max_difficulty = 1000000.0
+share_target_secs = 15.0
+
 [accounting]
 pplns_factor = 2.0
 pool_fee_percent = 1.0
@@ -71,6 +80,17 @@ name = "Rincoin"
 algo = "rinhash"
 template_rules = ["mweb", "segwit"]
 rpc_url = "http://127.0.0.1:29556"
+rpc_user = "pool"
+rpc_password = "pooldev"
+block_maturity = 100
+min_payout = 1.0
+
+[[coins]]
+symbol = "RVN"
+name = "Ravencoin"
+algo = "kawpow"
+chain = "ravencoin"
+rpc_url = "http://127.0.0.1:18766"
 rpc_user = "pool"
 rpc_password = "pooldev"
 block_maturity = 100

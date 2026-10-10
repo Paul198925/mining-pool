@@ -226,6 +226,7 @@ export async function nodeCompose(server: Server, poolUrl: string): Promise<stri
       ...(mesh ? ["    network_mode: host"] : []),
       "    command:",
       ...(net === "regtest" ? ["      - -regtest"] : []),
+      ...(coin.nodeArgs?.[net] ?? []).map((arg) => `      - ${arg}`),
       "      - -server",
       "      - -disablewallet",
       // Not reachable from the internet: bound to the private network, or unpublished.
