@@ -52,34 +52,6 @@ services:
       - -regtest
       - -listen=1
 
-  # Xaya regtest. The healthcheck doubles as wallet setup: the node starts without a wallet.
-  xaya:
-    build: docker/xaya
-    platform: linux/amd64
-    command:
-      - -regtest
-      - -listen=0
-      - -fallbackfee=0.001
-      - -rpcbind=0.0.0.0
-      - -rpcallowip=0.0.0.0/0
-      - -rpcport=18493
-      - -rpcuser=pool
-      - -rpcpassword=pooldev
-    ports:
-      - "127.0.0.1:18493:18493"
-    volumes:
-      - xaya:/data
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpassword=pooldev getwalletinfo
-          || xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpassword=pooldev
-          -named createwallet wallet_name=pool load_on_startup=true
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   # SpaceXpanse regtest. Its default RPC port equals its P2P port, so the RPC port is set explicitly.
   spacexpanse:
     build: docker/spacexpanse
@@ -122,5 +94,4 @@ services:
 volumes:
   pgdata:
   dogecoin:
-  xaya:
   spacexpanse:

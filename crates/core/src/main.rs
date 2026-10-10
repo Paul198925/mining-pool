@@ -30,6 +30,10 @@ async fn main() -> Result<()> {
     ensure!(locked, "another pool-core instance is already running against this database");
     info!("database ready");
 
+    // A coin that is no longer configured stays in the books but leaves the website.
+    let symbols: Vec<&str> = cfg.coins.iter().map(|coin| coin.symbol.as_str()).collect();
+    sqlx::query("UPDATE coins SET enabled = (symbol = ANY($1))").bind(&symbols).execute(&db).await?;
+
     for coin in &cfg.coins {
         let coin_id = pool_common::db::ensure_coin(&db, coin).await?;
         tokio::spawn(run_coin(db.clone(), coin_id, coin.clone(), cfg.accounting.clone()));

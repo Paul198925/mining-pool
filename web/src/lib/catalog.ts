@@ -60,16 +60,6 @@ export const COINS: CoinSpec[] = [
     minPayout: 50,
   },
   {
-    symbol: "CHI",
-    name: "Xaya",
-    algo: "neoscrypt-xaya",
-    chain: "xaya",
-    service: "xaya",
-    rpcPort: { main: 8396, regtest: 18493 },
-    blockMaturity: 100,
-    minPayout: 5,
-  },
-  {
     symbol: "ROD",
     name: "SpaceXpanse",
     algo: "neoscrypt-xaya",

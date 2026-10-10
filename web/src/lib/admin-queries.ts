@@ -51,6 +51,7 @@ export async function getFinances(): Promise<CoinFinance[]> {
             ${blocks("status = 'orphaned'")} AS blocks_orphaned,
             ${blocks("found_at > now() - interval '24 hours'")} AS blocks_24h
      FROM coins c
+     WHERE c.enabled OR EXISTS (SELECT 1 FROM ledger_entries l WHERE l.coin_id = c.id)
      ORDER BY c.symbol`,
   );
   return rows.map((r) => ({
@@ -270,7 +271,7 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
                WHERE s.coin_id = c.id AND s.created_at > now() - make_interval(secs => $2)) AS miners,
               COALESCE((SELECT sum(difficulty) FROM shares s
                         WHERE s.coin_id = c.id AND s.created_at > now() - make_interval(secs => $2)), 0) * $1 / $2 AS hashrate
-       FROM coins c ORDER BY c.symbol`,
+       FROM coins c WHERE c.enabled ORDER BY c.symbol`,
       [HASHES_PER_DIFF, LIVE_WINDOW_SECS],
     ),
   ]);

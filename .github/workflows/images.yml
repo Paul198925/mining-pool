@@ -52,9 +52,6 @@ jobs:
           - name: dogecoin
             context: docker/dogecoin
             file: docker/dogecoin/Dockerfile
-          - name: xaya
-            context: docker/xaya
-            file: docker/xaya/Dockerfile
           - name: spacexpanse
             context: docker/spacexpanse
             file: docker/spacexpanse/Dockerfile

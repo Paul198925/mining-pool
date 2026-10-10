@@ -1,4 +1,4 @@
-# CPU test miner for Xaya-style Neoscrypt (the "neoscrypt-xaya" algorithm of GPU miners).
+# CPU test miner for Xaya-style Neoscrypt, as used by SpaceXpanse (the "neoscrypt-xaya" algorithm of GPU miners).
 # No CPU miner ships it, so this is tpruvot/cpuminer-multi with the one difference patched in:
 # the merkle root words of the header are byte-swapped once more (compare xaya/ccminer).
 FROM debian:bookworm-slim AS build

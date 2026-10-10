@@ -23,7 +23,7 @@ Voraussetzungen: Docker, Rust, Node.js.
 docker compose up -d --build --wait
 ```
 
-Startet PostgreSQL (Port 55432), zwei Dogecoin-Nodes (RPC auf 18332) sowie je einen Xaya- und SpaceXpanse-Node (RPC auf 18493 und 18499), alle im Regtest-Modus. Alles ist nur an 127.0.0.1 gebunden.
+Startet PostgreSQL (Port 55432), zwei Dogecoin-Nodes (RPC auf 18332) sowie einen SpaceXpanse-Node (RPC auf 18499), alle im Regtest-Modus. Alles ist nur an 127.0.0.1 gebunden.
 
 Auf einer frischen Regtest-Chain einmalig Blöcke erzeugen, sonst liefert der Node keine Block-Templates:
 
@@ -57,17 +57,17 @@ MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner
 
 Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334). Laufen mehrere Coins auf einem Port, erkennt der Server die Coin an der Adresse; mit `c=<SYMBOL>` im Passwort legt der Miner sie selbst fest.
 
-Für Xaya und SpaceXpanse gibt es einen eigenen Test-Miner; die Adresse kommt vom Xaya-Node:
+Für SpaceXpanse gibt es einen eigenen Test-Miner; die Adresse kommt vom SpaceXpanse-Node:
 
 ```bash
-docker compose exec xaya xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpassword=pooldev getnewaddress
+docker compose exec spacexpanse spacexpanse-cli -regtest -rpcport=18499 -rpcuser=pool -rpcpassword=pooldev getnewaddress
 ```
 
 ```bash
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner-xaya
 ```
 
-SpaceXpanse nutzt denselben Miner und Port mit einer Adresse vom `spacexpanse`-Node (`spacexpanse-cli`, RPC-Port 18499).
+Xaya selbst wird nicht mehr unterstützt: Das Projekt hat seine Chain 2025 aufgegeben. Der Blockaufbau heißt im Code weiter `xaya`, weil SpaceXpanse ihn übernommen hat.
 
 Solo- und Party-Mining wählt der Miner ebenfalls über das Passwort: `MINER_PASSWORD=m=solo` oder `MINER_PASSWORD=m=party.<Name>` vor denselben Befehl setzen. Mehrere Optionen werden mit Komma getrennt.
 
@@ -125,7 +125,7 @@ Die Web-App braucht dafür zusätzlich:
 | Variable | Inhalt |
 |---|---|
 | `POOL_PUBLIC_URL` | Adresse, unter der die Server den Pool erreichen, z. B. `https://pool.example` |
-| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-xaya`, `...-spacexpanse` |
+| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse` |
 | `POOL_ADDRESS_<SYMBOL>` | optional: überschreibt die Adresse, die `pool-core` aus dem Pool-Wallet veröffentlicht |
 | `POOL_NETWORK` | `regtest` nur für Tests, sonst weglassen |
 

@@ -47,16 +47,6 @@ block_maturity = 240
 min_payout = 50.0
 
 [[coins]]
-symbol = "CHI"
-name = "Xaya"
-algo = "neoscrypt-xaya"
-chain = "xaya"
-rpc_url = "http://xaya:8396"
-rpc_user = "pool"
-block_maturity = 100
-min_payout = 5.0
-
-[[coins]]
 symbol = "ROD"
 name = "SpaceXpanse"
 algo = "neoscrypt-xaya"
