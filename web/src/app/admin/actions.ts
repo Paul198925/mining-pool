@@ -25,7 +25,9 @@ export async function login(_previous: string | null, form: FormData): Promise<s
   }
   (await cookies()).set(ADMIN_COOKIE, newSessionValue(), {
     httpOnly: true,
-    sameSite: "strict",
+    // "lax" still keeps the cookie off cross-site POSTs, but lets a link or bookmark open the
+    // admin area without a new login. Every admin action is a POST.
+    sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/admin",
     maxAge: SESSION_SECONDS,
