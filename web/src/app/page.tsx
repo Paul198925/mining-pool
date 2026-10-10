@@ -1,116 +1,136 @@
-import Link from "next/link";
 import { Suspense } from "react";
 
 import { AutoRefresh } from "@/components/auto-refresh";
 import { BlocksTable } from "@/components/blocks-table";
-import { HashrateChart } from "@/components/hashrate-chart";
-import { MinerSearch } from "@/components/miner-search";
-import { Card, Empty, Skeleton, Stat } from "@/components/ui";
-import { formatAge, formatAmount, formatDifficulty, formatHashrate } from "@/lib/format";
-import { type Coin, getBlocks, getCoins, getPoolHistory } from "@/lib/queries";
+import { WalletSearch } from "@/components/miner-search";
+import { Box, Empty, Skeleton } from "@/components/ui";
+import { formatAmount, formatHashrate } from "@/lib/format";
+import { getBlocks, getCoins } from "@/lib/queries";
 
 export default function Home() {
   return (
-    <>
+    <div className="columns">
       <AutoRefresh />
-      <Card title="Miner lookup">
-        <MinerSearch />
-      </Card>
-      <Suspense fallback={<Skeleton height={420} />}>
-        <Coins />
-      </Suspense>
-      <Suspense fallback={<Skeleton height={240} />}>
-        <RecentBlocks />
-      </Suspense>
-    </>
+      <div className="column">
+        <Box title="YOUR WALLET">
+          <WalletSearch />
+        </Box>
+        <Box title="MINING POOL">
+          <ul>
+            <li>No registration is required. Use your wallet address as the username.</li>
+            <li>We do payouts in the currency you mine.</li>
+            <li>
+              Payouts are made automatically for all balances above the minimum shown under Pool Status, as soon as the
+              blocks have matured. The transaction fee of a payout is shared by its recipients.
+            </li>
+            <li>Blocks are distributed proportionally among the most recent valid shares (PPLNS).</li>
+          </ul>
+        </Box>
+        <Suspense fallback={<Skeleton height={200} />}>
+          <StratumServers />
+        </Suspense>
+      </div>
+      <div className="column">
+        <Suspense fallback={<Skeleton height={160} />}>
+          <PoolStatus />
+        </Suspense>
+        <Suspense fallback={<Skeleton height={300} />}>
+          <LastBlocks />
+        </Suspense>
+      </div>
+    </div>
   );
 }
 
-async function Coins() {
+async function StratumServers() {
+  // Reading the coins first makes this render per request, so the host can come from the environment.
   const coins = await getCoins();
-  if (coins.length === 0) {
-    return (
-      <Card>
-        <Empty>No coins are configured yet.</Empty>
-      </Card>
-    );
-  }
-  return coins.map((coin) => <CoinCard key={coin.symbol} coin={coin} />);
-}
-
-async function CoinCard({ coin }: { coin: Coin }) {
-  const history = await getPoolHistory(coin.symbol);
   const host = process.env.POOL_STRATUM_HOST ?? "localhost";
+  const example = coins.find((coin) => coin.stratumPort !== null);
   return (
-    <Card>
-      <div className="mb-4 flex items-baseline gap-2">
-        <h2 className="text-lg font-semibold">{coin.name}</h2>
-        <span className="text-sm text-muted">
-          {coin.symbol} · {coin.algo}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Pool hashrate" value={formatHashrate(coin.hashrate)} />
-        <Stat label="Miners" value={coin.miners} hint={`${coin.workers} ${coin.workers === 1 ? "worker" : "workers"}`} />
-        <Stat
-          label="Network hashrate"
-          value={coin.networkHashrate === null ? "–" : formatHashrate(coin.networkHashrate)}
-        />
-        <Stat label="Difficulty" value={formatDifficulty(coin.networkDifficulty)} />
-        <Stat label="Height" value={coin.height ?? "–"} />
-        <Stat label="Blocks found" value={coin.blocksFound} hint={`last ${formatAge(coin.lastBlockAt)}`} />
-      </div>
-      <div className="mt-6">
-        <h3 className="mb-2 text-xs text-muted">Pool hashrate, last 24 hours</h3>
-        <HashrateChart points={history} label={`${coin.name} pool hashrate`} />
-      </div>
-      <div className="mt-6 border-t border-border pt-4">
-        <h3 className="mb-2 text-xs text-muted">How to mine</h3>
-        {coin.stratumPort === null ? (
-          <p className="text-sm text-muted">The stratum server for this coin is not running.</p>
-        ) : (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-            <dt className="text-muted">Server</dt>
-            <dd className="font-mono break-all">
-              stratum+tcp://{host}:{coin.stratumPort}
-            </dd>
-            <dt className="text-muted">Username</dt>
-            <dd>
-              Your {coin.symbol} address, optionally followed by <span className="font-mono">.workername</span>
-            </dd>
-            <dt className="text-muted">Password</dt>
-            <dd>
-              <span className="font-mono">x</span> for the shared pool. <span className="font-mono">m=solo</span> mines
-              solo: you keep every block you find ({coin.soloFeePercent ?? "–"}% fee) and get nothing from other
-              miners&apos; blocks. <span className="font-mono">m=party.NAME</span> mines in a private group: everyone
-              using the same name shares the blocks the group finds
-            </dd>
-            <dt className="text-muted">Payouts</dt>
-            <dd>
-              PPLNS, {coin.poolFeePercent ?? "–"}% fee, paid automatically from{" "}
-              {coin.minPayout === null ? "–" : formatAmount(coin.minPayout, 2)} {coin.symbol} once a block has{" "}
-              {coin.blockMaturity === null ? "–" : coin.blockMaturity + 1} confirmations. The transaction fee is
-              shared by the miners in each payout.
-            </dd>
-          </dl>
+    <Box title="STRATUM SERVERS">
+      <ul>
+        <li>
+          <p className="cmdline">
+            -a &lt;ALGO&gt; -o stratum+tcp://{host}:&lt;PORT&gt; -u &lt;WALLET_ADDRESS&gt;[.&lt;WORKER&gt;] [-p
+            &lt;OPTIONS&gt;]
+          </p>
+        </li>
+        <li>
+          &lt;WALLET_ADDRESS&gt; must be valid for the currency you mine. <b>Do not use an address of another coin.</b>
+        </li>
+        <li>See the &quot;Pool Status&quot; area for ALGO and PORT numbers.</li>
+        <li>
+          As optional password, use <b>-p m=solo</b> to mine solo: you keep every block you find and get nothing from
+          other miners&apos; blocks.
+        </li>
+        <li>
+          Use <b>-p m=party.&lt;NAME&gt;</b> to mine in a private group: everyone using the same name shares the blocks
+          the group finds.
+        </li>
+        {example && (
+          <li>
+            Example:
+            <p className="cmdline">
+              -a {example.algo} -o stratum+tcp://{host}:{example.stratumPort} -u &lt;{example.symbol}_ADDRESS&gt;.rig1
+              -p x
+            </p>
+          </li>
         )}
-      </div>
-    </Card>
+      </ul>
+    </Box>
   );
 }
 
-async function RecentBlocks() {
-  const blocks = await getBlocks(10);
+async function PoolStatus() {
+  const coins = await getCoins();
   return (
-    <Card
-      title="Recent blocks"
-      action={
-        <Link href="/blocks" className="text-xs text-accent">
-          All blocks
-        </Link>
-      }
-    >
+    <Box title="Pool Status">
+      {coins.length === 0 ? (
+        <Empty>No coins are configured yet.</Empty>
+      ) : (
+        <table className="datagrid">
+          <thead>
+            <tr>
+              <th>Algo</th>
+              <th>Coin</th>
+              <th className="right">Port</th>
+              <th className="right">Miners</th>
+              <th className="right">Hashrate</th>
+              <th className="right">Fees</th>
+              <th className="right">Solo</th>
+              <th className="right">Min. pay</th>
+            </tr>
+          </thead>
+          <tbody>
+            {coins.map((coin) => (
+              <tr key={coin.symbol}>
+                <td>
+                  <b>{coin.algo}</b>
+                </td>
+                <td>
+                  {coin.name} ({coin.symbol})
+                </td>
+                <td className="right">{coin.stratumPort ?? "–"}</td>
+                <td className="right">{coin.miners}</td>
+                <td className="right">{formatHashrate(coin.hashrate)}</td>
+                <td className="right">{coin.poolFeePercent === null ? "–" : `${coin.poolFeePercent}%`}</td>
+                <td className="right">{coin.soloFeePercent === null ? "–" : `${coin.soloFeePercent}%`}</td>
+                <td className="right">{coin.minPayout === null ? "–" : formatAmount(coin.minPayout, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Box>
+  );
+}
+
+async function LastBlocks() {
+  const blocks = await getBlocks(15);
+  return (
+    <Box title="Last 15 Blocks">
       <BlocksTable blocks={blocks} />
-    </Card>
+    </Box>
   );
 }

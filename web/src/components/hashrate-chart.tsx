@@ -99,20 +99,20 @@ export function HashrateChart({ points, label }: { points: HashratePoint[]; labe
         )}
         {hovered && hover !== null && (
           <div
-            className="pointer-events-none absolute top-0 rounded border border-border bg-surface px-2 py-1 text-xs shadow-sm"
+            className="pointer-events-none absolute top-0 rounded border border-border bg-surface px-2 py-1 shadow-sm"
             style={x(hover) > width / 2 ? { right: width - x(hover) + 10 } : { left: x(hover) + 10 }}
           >
-            <div className="font-mono font-medium">{formatHashrate(hovered.v)}</div>
+            <div className="font-bold">{formatHashrate(hovered.v)}</div>
             <div className="text-muted">{time.format(new Date(hovered.t))}</div>
           </div>
         )}
       </div>
-      <figcaption className="mt-2 flex gap-6 text-xs text-muted">
+      <figcaption className="mt-2 flex gap-6 text-muted">
         <span>
-          24h average <span className="font-mono text-foreground">{formatHashrate(average)}</span>
+          24h average <span className="font-bold text-foreground">{formatHashrate(average)}</span>
         </span>
         <span>
-          Peak <span className="font-mono text-foreground">{formatHashrate(peak)}</span>
+          Peak <span className="font-bold text-foreground">{formatHashrate(peak)}</span>
         </span>
       </figcaption>
     </figure>

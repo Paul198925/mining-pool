@@ -3,28 +3,31 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-export function MinerSearch() {
+export function WalletSearch({ initial = "" }: { initial?: string }) {
   const router = useRouter();
-  const [address, setAddress] = useState("");
+  const [address, setAddress] = useState(initial);
   return (
     <form
-      className="flex gap-2"
+      className="flex items-center gap-2 p-1"
       onSubmit={(event) => {
         event.preventDefault();
         const value = address.trim();
-        if (value) router.push(`/miner/${encodeURIComponent(value)}`);
+        if (value) router.push(`/wallet/${encodeURIComponent(value)}`);
       }}
     >
+      <label htmlFor="wallet-address">
+        <b>Wallet:</b>
+      </label>
       <input
+        id="wallet-address"
         value={address}
         onChange={(event) => setAddress(event.target.value)}
-        placeholder="Your payout address"
-        aria-label="Payout address"
+        placeholder="Your wallet address"
         spellCheck={false}
-        className="min-w-0 flex-1 rounded border border-border bg-surface px-3 py-2 font-mono text-sm outline-none focus:border-accent"
+        className="text-input"
       />
-      <button type="submit" className="rounded bg-accent px-4 py-2 text-sm font-medium text-white">
-        Show stats
+      <button type="submit" className="button">
+        Submit
       </button>
     </form>
   );

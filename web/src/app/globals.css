@@ -1,29 +1,15 @@
 @import "tailwindcss";
 
+/* The look follows YiiMP's stock theme (web/yaamp/ui/css): light only, small Arial,
+   a fixed dark tab bar, grey-titled boxes and compact tables. */
 :root {
-  --background: #f6f6f4;
-  --surface: #fcfcfb;
-  --border: #e4e3df;
-  --foreground: #0b0b0b;
-  --muted: #52514e;
-  --accent: #2a78d6;
-  --good: #1a7f37;
-  --warning: #9a6700;
-  --critical: #c62828;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #101010;
-    --surface: #1a1a19;
-    --border: #2e2e2b;
-    --foreground: #ffffff;
-    --muted: #c3c2b7;
-    --accent: #3987e5;
-    --good: #4cc26b;
-    --warning: #d9a514;
-    --critical: #f0706e;
-  }
+  color-scheme: light;
+  --background: #ffffff;
+  --surface: #ffffff;
+  --border: #e8e8e8;
+  --foreground: #444444;
+  --muted: #777777;
+  --accent: #306495;
 }
 
 @theme inline {
@@ -33,14 +19,232 @@
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
-  --color-good: var(--good);
-  --color-warning: var(--warning);
-  --color-critical: var(--critical);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
 }
 
 body {
+  margin: 0;
   background: var(--background);
   color: var(--foreground);
+  font: normal 10pt Arial, Helvetica, sans-serif;
+}
+
+a,
+a:visited {
+  color: #306495;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #73471b;
+  text-decoration: underline;
+}
+
+/* Top tab bar */
+.tabmenu {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 8;
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  padding: 0 10px;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: linear-gradient(#4b4b4b, #2a2a2a);
+  border-bottom: 1px solid #181818;
+  font-size: 1.1em;
+  font-weight: bold;
+}
+
+.tabmenu a,
+.tabmenu a:visited {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  color: #aaa;
+  text-decoration: none;
+}
+
+.tabmenu a:hover {
+  color: #eee;
+}
+
+.tabmenu a.site {
+  margin-right: 10px;
+  color: #eee;
+}
+
+.tabmenu a.selected {
+  color: #eee;
+  background: linear-gradient(#262626, #111111);
+  border-right: 1px solid #181818;
+  border-left: 1px solid #181818;
+}
+
+.page-body {
+  flex: 1;
+  padding: 60px 20px 20px;
+}
+
+.columns {
+  display: grid;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (min-width: 1000px) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.column {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.footer {
+  padding: 10px;
+  background-color: #ccc;
+  color: #333;
+  font-size: 0.8em;
+  font-weight: bold;
+  text-align: center;
+}
+
+/* Boxes: border, grey title bar, content */
+.box {
+  border: 1px solid #e8e8e8;
+  border-radius: 5px;
+  min-width: 0;
+}
+
+.box-title {
+  padding: 8px;
+  border-radius: 4px 4px 0 0;
+  background-color: #e5e5e5;
+  font-weight: bold;
+}
+
+.box-inner {
+  padding: 5px;
+  overflow-x: auto;
+}
+
+.box-inner ul {
+  margin: 5px 0 0;
+  padding: 0;
+}
+
+.box-inner li {
+  padding: 5px;
+  list-style: none;
+}
+
+.cmdline {
+  padding: 5px;
+  border: 1px solid #e8e8e8;
+  border-radius: 5px;
+  background-color: #ffffee;
+  font-family: monospace;
+  font-size: 0.95em;
+  overflow-wrap: anywhere;
+}
+
+.text-input {
+  min-width: 0;
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.button {
+  padding: 4px 12px;
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  background: linear-gradient(#fdfdfd, #e2e2e2);
+  color: #333;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+/* Tables ("datagrid", not "grid": that name is a Tailwind utility) */
+table.datagrid {
+  width: 100%;
+  border-collapse: collapse;
+  color: #555;
+}
+
+table.datagrid th,
+table.datagrid td {
+  padding: 0.4em;
+  text-align: left;
+  white-space: nowrap;
+}
+
+table.datagrid th {
+  font-weight: bold;
+}
+
+table.datagrid tbody {
+  border: 1px solid #eee;
+}
+
+table.datagrid td {
+  border-bottom: 1px solid #eee;
+}
+
+table.datagrid tbody tr:hover td {
+  background-color: #f6f8fb;
+}
+
+table.datagrid .right {
+  text-align: right;
+}
+
+.mono {
+  font-family: monospace;
+  font-size: 1.05em;
+}
+
+.empty {
+  padding: 15px 5px;
+  color: #777;
+  text-align: center;
+}
+
+/* Block status labels, as in YiiMP's block list */
+span.block {
+  display: inline-block;
+  min-width: 75px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: white;
+  text-align: center;
+}
+
+span.block.orphaned {
+  background-color: #d9534f;
+}
+
+span.block.pending {
+  background-color: #f0ad4e;
+}
+
+span.block.confirmed {
+  background-color: #5cb85c;
+}
+
+span.tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  color: #777;
+  font-size: 0.85em;
 }
