@@ -84,7 +84,7 @@ WG_IF=pool0
 curl -fsS -m 20 -X POST "$POOL_URL/api/node/heartbeat" -H "$AUTH" -H 'content-type: application/json' -d '{}' >/dev/null || true
 # Last, whichever way this script ends: collecting logs takes a few seconds and must not
 # delay the peer list. Not in the background: systemd stops what is left when we exit.
-trap '[ -x ./report.sh ] && ./report.sh >/dev/null 2>&1 || true' EXIT
+trap '[ -x ./report.sh ] && ./report.sh >/dev/null 2>&1; [ -x ./backup.sh ] && ./backup.sh >/dev/null 2>&1; true' EXIT
 [ -f wg-private.key ] || exit 0
 curl -fsS -m 20 "$POOL_URL/api/node/wireguard" -H "$AUTH" -o wg.new
 [ -s wg.new ] || exit 0
@@ -148,6 +148,34 @@ curl -fsS -m 30 -X POST "$POOL_URL/api/node/report" -H "Authorization: Bearer $(
   -H 'content-type: text/plain' --data-binary "@$OUT" >/dev/null
 REPORT
 chmod 700 report.sh
+
+cat > backup.sh <<'BACKUP'
+#!/usr/bin/env bash
+# Run every minute by sync.sh: hands the pool a copy of each wallet backup that pool-core
+# has the wallet nodes on this server write. The files are encrypted wallets; the pool
+# keeps them in its database, which is backed up off this machine.
+set -uo pipefail
+cd "$(dirname "$0")"
+POOL_URL="$(cat pool-url)"
+docker ps --filter label=com.docker.compose.project=pool-node --format '{{.Names}}' |
+  while read -r name; do
+    data="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$name" 2>/dev/null)"
+    [ -n "$data" ] || continue
+    # The newest backup; some daemons put it in a subfolder.
+    file="$(find "$data" -maxdepth 3 -name 'wallet-backup-*.dat' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
+    [ -n "$file" ] || continue
+    symbol="$(basename "$file" | sed -n 's/^wallet-backup-\([a-z0-9]*\)-.*/\1/p' | tr 'a-z' 'A-Z')"
+    [ -n "$symbol" ] || continue
+    sum="$(sha256sum "$file" | cut -d' ' -f1)"
+    # Each backup is handed over once.
+    [ "$(cat ".wallet-backup-$symbol.sent" 2>/dev/null)" = "$sum" ] && continue
+    if curl -fsS -m 120 -X POST "$POOL_URL/api/node/wallet-backup" -H "Authorization: Bearer $(cat token)" \
+      -H 'content-type: application/octet-stream' -H "x-pool-symbol: $symbol" --data-binary "@$file" >/dev/null; then
+      printf '%s' "$sum" > ".wallet-backup-$symbol.sent"
+    fi
+  done
+BACKUP
+chmod 700 backup.sh
 
 MESH="$(curl -fsS -o /dev/null -w '%{http_code}' "$POOL_URL/api/node/wireguard" -H "$AUTH")"
 if [ "$MESH" = 200 ]; then

@@ -2,6 +2,8 @@
 
 import { useActionState } from "react";
 
+import { formatAge } from "@/lib/format";
+
 import { saveCoin, type SaveState } from "./actions";
 
 export type AdminCoin = {
@@ -15,6 +17,8 @@ export type AdminCoin = {
   /** In coins, not base units. */
   minPayout: number | null;
   hasWallet: boolean;
+  /** When the newest copy of the wallet's backup reached the pool's database. */
+  backupAt: Date | null;
   /** Regions of the servers that run a node for this coin. */
   nodes: string[];
 };
@@ -59,6 +63,15 @@ export function CoinRow({ coin }: { coin: AdminCoin }) {
       {number("minPayout", coin.minPayout, "minimum payout")}
       <td>
         <span className={`block ${coin.hasWallet ? "confirmed" : "orphaned"}`}>{coin.hasWallet ? "connected" : "missing"}</span>
+      </td>
+      <td>
+        {coin.backupAt ? (
+          <a href={`/admin/wallet-backup/${coin.symbol}`} title="Download the newest copy (the encrypted wallet file)">
+            {formatAge(coin.backupAt)}
+          </a>
+        ) : (
+          <span className="block orphaned">none</span>
+        )}
       </td>
       <td>{coin.nodes.join(", ") || <span className="block orphaned">none</span>}</td>
       <td className="right">

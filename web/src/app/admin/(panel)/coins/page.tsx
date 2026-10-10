@@ -21,11 +21,12 @@ export default function CoinsPage() {
 }
 
 async function getCoins(): Promise<{ coins: AdminCoin[]; unknown: string[] }> {
-  const [rows, servers, addresses] = await Promise.all([
+  const [rows, servers, addresses, backups] = await Promise.all([
     db().query("SELECT symbol, name, algo, enabled, payouts_enabled, pool_fee_percent, solo_fee_percent, min_payout FROM coins ORDER BY symbol"),
     // A node that holds the pool wallet serves miners too.
     db().query("SELECT region, coins || wallets AS coins FROM stratum_instances WHERE token_hash IS NOT NULL ORDER BY id"),
     poolAddresses(),
+    db().query("SELECT symbol, max(received_at) AS at FROM wallet_backups GROUP BY symbol"),
   ]);
   const coins = rows.rows.map((r) => ({
     symbol: r.symbol,
@@ -37,6 +38,7 @@ async function getCoins(): Promise<{ coins: AdminCoin[]; unknown: string[] }> {
     soloFeePercent: r.solo_fee_percent,
     minPayout: r.min_payout === null ? null : Number(r.min_payout) / 1e8,
     hasWallet: Boolean(addresses[r.symbol]),
+    backupAt: backups.rows.find((backup) => backup.symbol === r.symbol)?.at ?? null,
     nodes: servers.rows.filter((server) => server.coins.includes(r.symbol)).map((server) => server.region),
   }));
   // The pool can run these, but pool-core has no wallet node configured for them yet.
@@ -64,6 +66,7 @@ async function Coins() {
               <th className="right">Solo fee %</th>
               <th className="right">Minimum payout</th>
               <th>Pool wallet</th>
+              <th>Wallet copy</th>
               <th>Nodes on servers</th>
               <th></th>
             </tr>
@@ -87,6 +90,12 @@ async function Coins() {
           already been asked to send is not stopped.
         </li>
         <li>Fees apply to blocks found from now on. The minimum payout applies from the next payout round.</li>
+        <li>
+          Wallet copy: pool-core has every wallet node write a backup of its wallet once a day, and the server
+          hands a copy to the pool&apos;s database. It is the encrypted wallet; its passphrase is only in
+          pool-core&apos;s environment. Click the age to download the newest copy. With the database backed up
+          elsewhere, the wallets are too.
+        </li>
         <li>Which server runs a node is set on the Servers page.</li>
         {unknown.length > 0 && (
           <li>
