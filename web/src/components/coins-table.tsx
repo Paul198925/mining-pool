@@ -1,6 +1,14 @@
 import Link from "next/link";
 
-import { formatAge, formatAmount, formatDifficulty, formatDuration, formatHashrate, timeToFind } from "@/lib/format";
+import {
+  formatAge,
+  formatAmount,
+  formatDifficulty,
+  formatDuration,
+  formatHashrate,
+  formatUsd,
+  timeToFind,
+} from "@/lib/format";
 import type { Coin } from "@/lib/queries";
 
 import { Empty } from "./ui";
@@ -16,6 +24,9 @@ export function CoinsTable({ coins }: { coins: Coin[] }) {
         <tr>
           <th>Name</th>
           <th>Algo</th>
+          <th className="right" title="The market price the pool's internal exchange uses, in US dollars">
+            Price
+          </th>
           <th className="right">Port</th>
           <th className="right">Height</th>
           <th className="right">Difficulty</th>
@@ -39,6 +50,7 @@ export function CoinsTable({ coins }: { coins: Coin[] }) {
             <td>
               <Link href={`/algo/${coin.algo}`}>{coin.algo}</Link>
             </td>
+            <td className="right">{formatUsd(coin.priceUsd)}</td>
             <td className="right">{coin.stratumPort ?? "–"}</td>
             <td className="right">{coin.height ?? "–"}</td>
             <td className="right">{formatDifficulty(coin.networkDifficulty)}</td>

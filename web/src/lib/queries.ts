@@ -1,3 +1,4 @@
+import { coinSpec } from "./catalog";
 import { connection } from "next/server";
 
 import { db } from "./db";
@@ -17,6 +18,8 @@ export type Coin = {
   stratumPort: number | null;
   /** The internal exchange has a current price for it. */
   exchangeable: boolean;
+  /** That price in US dollars; null without a current one. */
+  priceUsd: number | null;
   blockMaturity: number | null;
   /** Base units (1e-8 coin) as a decimal string. */
   minPayout: string | null;
@@ -72,6 +75,10 @@ export type MinerAccount = {
   payouts: Payout[];
   credits: Credit[];
   history: HashratePoint[];
+  /** The current price of the account's coin in US dollars, if the pool has one. */
+  priceUsd: number | null;
+  /** What the account is mining right now, per coin, with that coin's network difficulty. */
+  mining: { symbol: string; hashrate: number; networkDifficulty: number | null }[];
   /** Earned in other coins and not yet swapped into this account's coin. */
   waiting: { symbol: string; amount: string }[];
   exchanges: Exchange[];
@@ -94,6 +101,7 @@ export async function getCoins(): Promise<Coin[]> {
     `SELECT c.symbol, c.name, c.algo, c.height, c.network_difficulty, c.network_hashrate, c.stratum_port,
             c.block_maturity, c.min_payout, c.pool_fee_percent, c.solo_fee_percent,
             COALESCE(c.price_at > now() - interval '20 minutes', FALSE) AS exchangeable,
+            CASE WHEN c.price_at > now() - interval '20 minutes' THEN c.price_usd END AS price_usd,
             COALESCE(live.difficulty, 0) * $1 / $2 AS hashrate,
             COALESCE(live.miners, 0) AS miners, COALESCE(live.workers, 0) AS workers,
             (SELECT count(*) FROM blocks b WHERE b.coin_id = c.id AND b.status <> 'orphaned') AS blocks_found,
@@ -116,6 +124,7 @@ export async function getCoins(): Promise<Coin[]> {
     networkHashrate: r.network_hashrate,
     stratumPort: r.stratum_port,
     exchangeable: r.exchangeable,
+    priceUsd: r.price_usd,
     blockMaturity: r.block_maturity,
     minPayout: r.min_payout,
     poolFeePercent: r.pool_fee_percent,
@@ -199,7 +208,8 @@ export async function getPoolHistory(coinSymbol: string): Promise<HashratePoint[
 export async function getMiner(address: string): Promise<MinerAccount[]> {
   await connection();
   const accounts = await db().query(
-    `SELECT a.id, c.id AS coin_id, c.symbol
+    `SELECT a.id, c.id AS coin_id, c.symbol,
+            CASE WHEN c.price_at > now() - interval '20 minutes' THEN c.price_usd END AS price_usd
      FROM accounts a JOIN coins c ON c.id = a.payout_coin_id
      WHERE a.payout_address = $1
      ORDER BY c.symbol`,
@@ -207,8 +217,8 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
   );
 
   return Promise.all(
-    accounts.rows.map(async ({ id, coin_id, symbol }) => {
-      const [totals, workers, payouts, credits, history, waiting, exchanges] = await Promise.all([
+    accounts.rows.map(async ({ id, coin_id, symbol, price_usd }) => {
+      const [totals, workers, payouts, credits, history, waiting, exchanges, mining] = await Promise.all([
         db().query(
           `SELECT
              (SELECT COALESCE(sum(amount), 0) FROM ledger_entries WHERE account_id = $1 AND coin_id = $2) AS balance,
@@ -258,12 +268,30 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
            ORDER BY e.id DESC LIMIT 20`,
           [id],
         ),
+        db().query(
+          `SELECT c.symbol, c.network_difficulty, sum(s.difficulty) * $2 / $3 AS hashrate
+           FROM shares s JOIN coins c ON c.id = s.coin_id
+           WHERE s.account_id = $1 AND s.created_at > now() - make_interval(secs => $3)
+           GROUP BY c.symbol, c.network_difficulty
+           ORDER BY c.symbol`,
+          [id, HASHES_PER_DIFF, LIVE_WINDOW_SECS],
+        ),
       ]);
+      const perCoin = mining.rows.map((r) => ({
+        symbol: r.symbol as string,
+        hashrate: r.hashrate as number,
+        networkDifficulty: r.network_difficulty as number | null,
+      }));
+      // A merge-mined coin gets the same shares as the coin it rides along with: the
+      // miner's hashrate is that of the coins they actually work on.
+      const worked = perCoin.filter((coin) => !coinSpec(coin.symbol)?.auxOf);
       const t = totals.rows[0];
       return {
         symbol,
         address,
-        hashrate: t.hashrate,
+        hashrate: (worked.length > 0 ? worked : perCoin).reduce((sum, coin) => sum + coin.hashrate, 0),
+        priceUsd: price_usd,
+        mining: perCoin,
         balance: t.balance,
         immature: t.immature,
         paid: t.paid,
@@ -302,4 +330,14 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
 /** Payout addresses are base58 or bech32; anything else cannot be a miner. */
 export function isPlausibleAddress(address: string): boolean {
   return /^[A-Za-z0-9]{20,100}$/.test(address);
+}
+
+/** Whether the internal exchange is on, and what it charges. */
+export async function getExchangeSettings(): Promise<{ enabled: boolean; feePercent: number }> {
+  await connection();
+  const { rows } = await db().query(
+    "SELECT name, value FROM pool_settings WHERE name IN ('exchange_enabled', 'exchange_fee_percent')",
+  );
+  const setting = (name: string) => rows.find((row) => row.name === name)?.value;
+  return { enabled: setting("exchange_enabled") === "true", feePercent: Number(setting("exchange_fee_percent") ?? 0) };
 }

@@ -44,6 +44,19 @@ export function timeToFind(networkDifficulty: number | null, hashrate: number): 
   return (networkDifficulty * 4294967296) / hashrate;
 }
 
+/** A price or value in US dollars; small ones keep three significant digits. */
+export function formatUsd(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "–";
+  if (value === 0) return "$0";
+  if (Math.abs(value) >= 1) return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `$${Number(value.toPrecision(3)).toString()}`;
+}
+
+/** What an amount in base units is worth at `priceUsd` per coin. */
+export function valueUsd(units: string, priceUsd: number | null): number | null {
+  return priceUsd === null ? null : (Number(units) / 1e8) * priceUsd;
+}
+
 /** A time span in its two largest units, e.g. "3h 20m" or "12d 4h". */
 export function formatDuration(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds)) return "–";

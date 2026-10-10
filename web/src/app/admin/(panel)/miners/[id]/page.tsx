@@ -6,7 +6,7 @@ import { Suspense } from "react";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { BlockStatus, Box, Empty, Skeleton } from "@/components/ui";
 import { getAdminAccount } from "@/lib/admin-queries";
-import { formatAge, formatAmount, formatHashrate, shorten } from "@/lib/format";
+import { formatAge, formatAmount, formatDuration, formatHashrate, formatUsd, shorten, timeToFind, valueUsd } from "@/lib/format";
 import { getMiner } from "@/lib/queries";
 
 import { AddressForm } from "./address-form";
@@ -51,12 +51,22 @@ async function Miner({ params }: Pick<PageProps<"/admin/miners/[id]">, "params">
                   <th>Hashrate</th>
                   <td>{formatHashrate(stats.hashrate)}</td>
                 </tr>
+                {stats.mining.map((coin) => (
+                  <tr key={coin.symbol}>
+                    <th>Mining {coin.symbol}</th>
+                    <td>
+                      {formatHashrate(coin.hashrate)}, alone a block every{" "}
+                      {formatDuration(timeToFind(coin.networkDifficulty, coin.hashrate))}
+                    </td>
+                  </tr>
+                ))}
                 <tr>
                   <th>Balance</th>
                   <td>
                     <b>
                       {formatAmount(stats.balance)} {account.symbol}
                     </b>
+                    {stats.priceUsd !== null && <> (about {formatUsd(valueUsd(stats.balance, stats.priceUsd))})</>}
                   </td>
                 </tr>
                 <tr>

@@ -7,7 +7,16 @@ import { HashrateChart } from "@/components/hashrate-chart";
 import { WalletSearch } from "@/components/miner-search";
 import { RememberWallet } from "@/components/saved-wallets";
 import { BlockStatus, Box, Empty, Skeleton } from "@/components/ui";
-import { formatAge, formatAmount, formatHashrate, shorten } from "@/lib/format";
+import {
+  formatAge,
+  formatAmount,
+  formatDuration,
+  formatHashrate,
+  formatUsd,
+  shorten,
+  timeToFind,
+  valueUsd,
+} from "@/lib/format";
 import { getMiner, isPlausibleAddress, type MinerAccount } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Wallet" };
@@ -48,6 +57,9 @@ async function Wallet({ params }: Pick<PageProps<"/wallet/[address]">, "params">
                   <th className="right">Hashrate</th>
                   <th className="right">Immature</th>
                   <th className="right">Balance</th>
+                  <th className="right" title="The balance at the current market price">
+                    Value
+                  </th>
                   <th className="right">Total paid</th>
                   <th className="right">Total earned</th>
                 </tr>
@@ -63,6 +75,7 @@ async function Wallet({ params }: Pick<PageProps<"/wallet/[address]">, "params">
                     <td className="right">
                       <b>{formatAmount(account.balance)}</b>
                     </td>
+                    <td className="right">{formatUsd(valueUsd(account.balance, account.priceUsd))}</td>
                     <td className="right">{formatAmount(account.paid)}</td>
                     <td className="right">
                       {formatAmount((BigInt(account.balance) + BigInt(account.paid)).toString())}
@@ -73,6 +86,11 @@ async function Wallet({ params }: Pick<PageProps<"/wallet/[address]">, "params">
             </table>
           )}
         </Box>
+        {accounts
+          .filter((account) => account.mining.length > 0)
+          .map((account) => (
+            <Mining key={account.symbol} account={account} />
+          ))}
         {accounts.map((account) => (
           <Miners key={account.symbol} account={account} />
         ))}
@@ -98,6 +116,42 @@ async function Wallet({ params }: Pick<PageProps<"/wallet/[address]">, "params">
           ))}
       </div>
     </div>
+  );
+}
+
+/** What the account mines right now, and how long it would need for a block on its own. */
+function Mining({ account }: { account: MinerAccount }) {
+  return (
+    <Box title={`Mining now (${account.symbol} account)`}>
+      <table className="datagrid">
+        <thead>
+          <tr>
+            <th>Coin</th>
+            <th className="right">Hashrate</th>
+            <th className="right" title="Time to find: how long this hashrate alone needs on average for one block">
+              TTF alone
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {account.mining.map((coin) => (
+            <tr key={coin.symbol}>
+              <td>
+                <b>{coin.symbol}</b>
+              </td>
+              <td className="right">{formatHashrate(coin.hashrate)}</td>
+              <td className="right">{formatDuration(timeToFind(coin.networkDifficulty, coin.hashrate))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul>
+        <li>
+          An average for your hashrate on its own, which is what counts when you mine solo. In the pool you are paid
+          a share of every block the pool finds; how often that is stands on the Pool page.
+        </li>
+      </ul>
+    </Box>
   );
 }
 
