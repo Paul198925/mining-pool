@@ -31,6 +31,14 @@ min_difficulty = 0.01
 max_difficulty = 1000000.0
 share_target_secs = 15.0
 
+[[stratum]]
+listen = "0.0.0.0:3335"
+algo = "rinhash"
+start_difficulty = 0.0002
+min_difficulty = 0.000001
+max_difficulty = 10000.0
+share_target_secs = 15.0
+
 [accounting]
 pplns_factor = 2.0
 pool_fee_percent = 1.0
@@ -55,3 +63,13 @@ rpc_url = "http://spacexpanse:11999"
 rpc_user = "pool"
 block_maturity = 120
 min_payout = 50.0
+
+[[coins]]
+symbol = "RIN"
+name = "Rincoin"
+algo = "rinhash"
+template_rules = ["mweb", "segwit"]
+rpc_url = "http://rincoin:9556"
+rpc_user = "pool"
+block_maturity = 100
+min_payout = 1.0

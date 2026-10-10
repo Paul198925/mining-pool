@@ -22,7 +22,7 @@ USER pool
 # One per region. Publish the stratum ports (see config/production.toml).
 FROM runtime AS stratum
 COPY --from=build /src/target/release/pool-stratum /usr/local/bin/pool-stratum
-EXPOSE 3333 3334
+EXPOSE 3333 3334 3335
 CMD ["pool-stratum"]
 
 # Exactly one in the whole pool: it does the accounting and sends the payouts.

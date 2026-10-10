@@ -23,12 +23,12 @@ pub async fn run(
     rpc: RpcClient,
     pool: Arc<Pool>,
     chain: Chain,
-    segwit: bool,
+    rules: Vec<String>,
     instance_id: u8,
     payout_script: Vec<u8>,
     jobs: watch::Sender<Option<Arc<Job>>>,
 ) {
-    let request: Value = chain.template_request(segwit);
+    let request: Value = chain.template_request(&rules);
     let mut last: Option<(String, Vec<String>, Instant)> = None;
     let mut last_error = None;
     let mut next_id = 1u64;

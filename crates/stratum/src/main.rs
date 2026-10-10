@@ -158,7 +158,7 @@ async fn start_listener(
         let payout_script = payout_script(&rpc, coin).await.with_context(|| format!("coin {}", coin.symbol))?;
         let pool = Arc::new(Pool::default());
         let (job_tx, jobs) = watch::channel(None);
-        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, coin.segwit, instance_id, payout_script, job_tx));
+        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, coin.template_rules.clone(), instance_id, payout_script, job_tx));
         let recorder = Recorder::spawn(sink);
         contexts.push(CoinCtx { symbol: coin.symbol.clone(), coin_id, rpc, pool, recorder, jobs });
     }

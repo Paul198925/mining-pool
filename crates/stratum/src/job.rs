@@ -1,6 +1,6 @@
 use std::{collections::HashSet, sync::Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -33,6 +33,8 @@ pub struct BlockTemplate {
     pub height: u64,
     /// Output script committing to the witness data, on segwit chains.
     pub default_witness_commitment: Option<String>,
+    /// A MimbleWimble extension block that would have to be appended to the block.
+    pub mweb: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +113,8 @@ impl Job {
         payout_script: &[u8],
         clean: bool,
     ) -> Result<Self> {
+        // Building such a block needs the extension block appended; this pool does not do that yet.
+        ensure!(template.mweb.is_none(), "the template carries an MWEB extension block");
         let prev_hash = hash_from_display_hex(&template.previousblockhash)?;
         let nbits = u32::from_str_radix(&template.bits, 16).context("template bits")?;
         let mut txids = Vec::with_capacity(template.transactions.len());
@@ -224,7 +228,9 @@ impl Job {
                 header[68..72].copy_from_slice(&ntime.to_le_bytes());
                 header[72..76].copy_from_slice(&nbits.to_le_bytes());
                 header[76..80].copy_from_slice(&nonce.to_le_bytes());
-                (algo.hash(&header), sha256d(&header), header.to_vec(), coinbase)
+                let pow = algo.hash(&header);
+                let block_id = if algo.block_id_is_pow_hash() { pow } else { sha256d(&header) };
+                (pow, block_id, header.to_vec(), coinbase)
             }
             Work::Xaya { header_prefix, coinbase, pow_bits, fake_version } => {
                 let header = [&header_prefix[..], &extranonce].concat();
@@ -359,6 +365,7 @@ pub mod tests {
             bits: "207fffff".into(),
             height: 102,
             default_witness_commitment: None,
+            mweb: None,
         }
     }
 

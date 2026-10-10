@@ -27,6 +27,8 @@ export type AlgoSpec = {
 export const ALGOS: Record<string, AlgoSpec> = {
   scrypt: { port: 3333, startDifficulty: 8192, minDifficulty: 16, maxDifficulty: 1e8 },
   "neoscrypt-xaya": { port: 3334, startDifficulty: 4, minDifficulty: 0.01, maxDifficulty: 1e6 },
+  // RinHash miners take stratum difficulty at face value, and a CPU does some 25 kH/s per thread.
+  rinhash: { port: 3335, startDifficulty: 0.0002, minDifficulty: 0.000001, maxDifficulty: 1e4 },
 };
 
 /** Regtest difficulty is trivial, so real-world share difficulties would never be met. */
@@ -44,6 +46,8 @@ export type CoinSpec = {
   /** Image name suffix and compose service name. */
   service: string;
   rpcPort: Record<Network, number>;
+  /** Rule sets the node wants named in block-template requests. */
+  templateRules?: string[];
   blockMaturity: number;
   minPayout: number;
 };
@@ -70,6 +74,18 @@ export const COINS: CoinSpec[] = [
     minPayout: 50,
   },
 ];
+
+COINS.push({
+  symbol: "RIN",
+  name: "Rincoin",
+  algo: "rinhash",
+  chain: "bitcoin",
+  service: "rincoin",
+  rpcPort: { main: 9556, regtest: 29556 },
+  templateRules: ["mweb", "segwit"],
+  blockMaturity: 100,
+  minPayout: 1,
+});
 
 export function coinSpec(symbol: string): CoinSpec | undefined {
   return COINS.find((coin) => coin.symbol === symbol);
@@ -118,6 +134,7 @@ export function nodeConfig(
       name: coin.name,
       algo: coin.algo,
       chain: coin.chain,
+      template_rules: coin.templateRules ?? [],
       rpc_url: `http://${coin.service}:${coin.rpcPort[network()]}`,
       rpc_user: "pool",
       pool_address: addresses[coin.symbol] ?? null,

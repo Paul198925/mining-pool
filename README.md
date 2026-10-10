@@ -55,7 +55,7 @@ docker compose exec dogecoin dogecoin-cli -regtest -rpcport=18332 -rpcuser=pool 
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner
 ```
 
-Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334). Laufen mehrere Coins auf einem Port, erkennt der Server die Coin an der Adresse; mit `c=<SYMBOL>` im Passwort legt der Miner sie selbst fest.
+Es gibt einen Stratum-Port pro Algo (Scrypt 3333, Neoscrypt-Xaya 3334, RinHash 3335). Laufen mehrere Coins auf einem Port, erkennt der Server die Coin an der Adresse; mit `c=<SYMBOL>` im Passwort legt der Miner sie selbst fest.
 
 Für SpaceXpanse gibt es einen eigenen Test-Miner; die Adresse kommt vom SpaceXpanse-Node:
 
@@ -66,6 +66,8 @@ docker compose exec spacexpanse spacexpanse-cli -regtest -rpcport=18499 -rpcuser
 ```bash
 MINER_ADDRESS=<Adresse> docker compose --profile miner run --rm miner-xaya
 ```
+
+Rincoin (RinHash, Port 3335) hat ebenfalls einen eigenen Test-Miner, `miner-rin`, mit einer Adresse vom `rincoin`-Node (`rincoin-cli`, RPC-Port 29556).
 
 Xaya selbst wird nicht mehr unterstützt: Das Projekt hat seine Chain 2025 aufgegeben. Der Blockaufbau heißt im Code weiter `xaya`, weil SpaceXpanse ihn übernommen hat.
 
@@ -126,7 +128,7 @@ Die Web-App braucht dafür zusätzlich:
 | Variable | Inhalt |
 |---|---|
 | `POOL_PUBLIC_URL` | Adresse, unter der die Server den Pool erreichen, z. B. `https://pool.example` |
-| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse` |
+| `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse`, `...-rincoin` |
 | `POOL_ADDRESS_<SYMBOL>` | optional: überschreibt die Adresse, die `pool-core` aus dem Pool-Wallet veröffentlicht |
 | `POOL_NETWORK` | `regtest` nur für Tests, sonst weglassen |
 
@@ -138,7 +140,7 @@ Welche Coins es gibt und wie ihre Nodes gestartet werden, steht in `web/src/lib/
 
 Mit `POOL_WALLET_PASSPHRASE_<SYMBOL>` verschlüsselt `pool-core` das Wallet beim nächsten Start und entsperrt es nur für die Dauer einer Auszahlung. Das lässt sich nicht rückgängig machen: Ohne die Passphrase sind die Coins verloren, sie gehört deshalb zusätzlich an einen sicheren Ort außerhalb des Servers.
 
-Einmal täglich lässt `pool-core` den Wallet-Node eine Kopie des Wallets in dessen Datenverzeichnis schreiben (`wallet-backup-<symbol>-<Tag>.dat`, ein Monat Verlauf). Diese Kopie schützt vor einer beschädigten Wallet-Datei, nicht vor dem Verlust des Servers. Der Admin-Bereich zeigt je Coin, ob das Wallet verschlüsselt ist und wann zuletzt gesichert wurde.
+Einmal täglich lässt `pool-core` den Wallet-Node eine Kopie des Wallets in dessen Datenverzeichnis schreiben (`wallet-backup-<symbol>-<Tag>.dat`, ein Monat Verlauf). Diese Kopie schützt vor einer beschädigten Wallet-Datei, nicht vor dem Verlust des Servers. Dogecoin legt sie in den Unterordner `backups` seines Datenverzeichnisses. Der Admin-Bereich zeigt je Coin, ob das Wallet verschlüsselt ist und wann zuletzt gesichert wurde.
 
 Die Uhren aller Server müssen per NTP synchron laufen, weil Shares und Blöcke über ihren Zeitstempel zugeordnet werden.
 

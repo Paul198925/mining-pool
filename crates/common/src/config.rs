@@ -69,10 +69,10 @@ pub struct Coin {
     /// Block layout family: "bitcoin" (default) or "xaya".
     #[serde(default = "default_chain")]
     pub chain: String,
-    /// Whether the chain has segwit. The node then only hands out block templates to a
-    /// client that announces segwit support.
+    /// Rule sets to announce when asking the node for a block template, e.g. `["segwit"]`.
+    /// Chains with segwit or MWEB refuse a client that does not name them.
     #[serde(default)]
-    pub segwit: bool,
+    pub template_rules: Vec<String>,
     pub rpc_url: String,
     pub rpc_user: String,
     #[serde(default)]

@@ -80,6 +80,33 @@ services:
       timeout: 5s
       retries: 20
 
+  # Rincoin regtest. Its extension-block feature (MWEB) would switch on after a few hundred
+  # blocks on regtest; it is not active on mainnet and this pool does not build such blocks.
+  rincoin:
+    build: docker/rincoin
+    platform: linux/amd64
+    environment:
+      POOL_WALLET: pool
+    command:
+      - -regtest
+      - -listen=0
+      - -fallbackfee=0.001
+      - -vbparams=mweb:-2:0
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcport=29556
+      - -rpcuser=pool
+      - -rpcpassword=pooldev
+    ports:
+      - "127.0.0.1:29556:29556"
+    volumes:
+      - rincoin:/data
+    healthcheck:
+      test: ["CMD", "rincoin-cli", "-regtest", "-rpcport=29556", "-rpcuser=pool", "-rpcpassword=pooldev", "getblockcount"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # Test miners, started on demand, e.g.: docker compose --profile miner run --rm miner
   miner:
     build: docker/cpuminer
@@ -91,7 +118,13 @@ services:
     profiles: [miner]
     command: ["-a", "neoscrypt", "-o", "stratum+tcp://host.docker.internal:${MINER_PORT:-3334}", "-u", "${MINER_ADDRESS:-unset}.rig1", "-p", "${MINER_PASSWORD:-x}", "-t", "1"]
 
+  miner-rin:
+    build: docker/cpuminer-rin
+    profiles: [miner]
+    command: ["-a", "rinhash", "-o", "stratum+tcp://host.docker.internal:3335", "-u", "${MINER_ADDRESS:-unset}.rig1", "-p", "${MINER_PASSWORD:-x}", "-t", "1"]
+
 volumes:
   pgdata:
   dogecoin:
   spacexpanse:
+  rincoin:
