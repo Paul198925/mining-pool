@@ -9,6 +9,11 @@ url = "redis://127.0.0.1:56379"
 
 [stratum]
 listen = "127.0.0.1:3333"
+coin = "DOGE"
+start_difficulty = 0.1
+min_difficulty = 0.001
+max_difficulty = 1000000.0
+share_target_secs = 15.0
 
 [[coins]]
 symbol = "DOGE"

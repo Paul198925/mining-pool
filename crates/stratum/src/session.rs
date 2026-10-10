@@ -1,16 +1,22 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tracing::debug;
 
-const EXTRANONCE2_SIZE: usize = 4;
+use crate::{
+    job::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE, FoundBlock, Job, ShareError},
+    pool::Pool,
+    vardiff::VarDiff,
+};
 
 // Stratum V1 error codes as used by Yiimp and most miners.
 const ERR_OTHER: i64 = 20;
+const ERR_JOB_NOT_FOUND: i64 = 21;
+const ERR_DUPLICATE: i64 = 22;
+const ERR_LOW_DIFFICULTY: i64 = 23;
 const ERR_UNAUTHORIZED: i64 = 24;
 const ERR_NOT_SUBSCRIBED: i64 = 25;
-
-static NEXT_EXTRANONCE1: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Deserialize)]
 struct Request {
@@ -21,56 +27,113 @@ struct Request {
     params: Vec<Value>,
 }
 
+/// What the connection task has to do after feeding the session an event.
+#[derive(Default)]
+pub struct Output {
+    pub lines: Vec<String>,
+    pub block: Option<FoundBlock>,
+}
+
 /// Per-connection Stratum V1 state. Pure request/response logic, no I/O.
 pub struct Session {
-    extranonce1: u32,
+    pool: Arc<Pool>,
+    extranonce1: [u8; EXTRANONCE1_SIZE],
     subscribed: bool,
     worker: Option<String>,
+    vardiff: VarDiff,
+    /// Difficulty each job was sent with; shares are judged against that, not the current one.
+    job_diffs: HashMap<String, f64>,
 }
 
 impl Session {
-    pub fn new() -> Self {
+    pub fn new(pool: Arc<Pool>, now: Instant) -> Self {
         Self {
-            extranonce1: NEXT_EXTRANONCE1.fetch_add(1, Ordering::Relaxed),
+            extranonce1: pool.next_extranonce1(),
+            vardiff: VarDiff::new(pool.vardiff, now),
+            pool,
             subscribed: false,
             worker: None,
+            job_diffs: HashMap::new(),
         }
     }
 
-    /// Returns the JSON line to send back, if the message warrants one.
-    pub fn handle_line(&mut self, line: &str) -> Option<String> {
+    pub fn handle_line(&mut self, line: &str, current: Option<&Job>, now: Instant) -> Output {
+        let mut out = Output::default();
         let line = line.trim();
         if line.is_empty() {
-            return None;
+            return out;
         }
         let req: Request = match serde_json::from_str(line) {
             Ok(req) => req,
-            Err(_) => return Some(error(Value::Null, ERR_OTHER, "Malformed request")),
+            Err(_) => {
+                out.lines.push(error(Value::Null, ERR_OTHER, "Malformed request"));
+                return out;
+            }
         };
-        let reply = match req.method.as_str() {
-            "mining.subscribe" => self.subscribe(req.id),
-            "mining.authorize" => self.authorize(req.id, &req.params),
-            "mining.extranonce.subscribe" => ok(req.id, json!(true)),
-            "mining.submit" if !self.subscribed => error(req.id, ERR_NOT_SUBSCRIBED, "Not subscribed"),
-            "mining.submit" if self.worker.is_none() => error(req.id, ERR_UNAUTHORIZED, "Unauthorized worker"),
-            // Share validation arrives with the job pipeline.
-            "mining.submit" => error(req.id, ERR_OTHER, "No active job"),
-            _ => error(req.id, ERR_OTHER, "Unknown method"),
-        };
-        Some(reply)
+        match req.method.as_str() {
+            "mining.subscribe" => {
+                self.subscribed = true;
+                let extranonce1 = hex::encode(self.extranonce1);
+                out.lines.push(ok(
+                    req.id,
+                    json!([
+                        [["mining.set_difficulty", extranonce1], ["mining.notify", extranonce1]],
+                        extranonce1,
+                        EXTRANONCE2_SIZE
+                    ]),
+                ));
+                out.lines.push(set_difficulty(self.vardiff.diff()));
+                out.lines.extend(current.and_then(|job| self.on_job(job)));
+            }
+            "mining.authorize" => out.lines.push(self.authorize(req.id, &req.params)),
+            "mining.extranonce.subscribe" => out.lines.push(ok(req.id, json!(true))),
+            "mining.submit" if !self.subscribed => {
+                out.lines.push(error(req.id, ERR_NOT_SUBSCRIBED, "Not subscribed"));
+            }
+            "mining.submit" if self.worker.is_none() => {
+                out.lines.push(error(req.id, ERR_UNAUTHORIZED, "Unauthorized worker"));
+            }
+            "mining.submit" => {
+                let (reply, block) = self.submit(req.id, &req.params);
+                out.lines.push(reply);
+                out.block = block;
+                out.lines.extend(self.retarget(current, now));
+            }
+            _ => out.lines.push(error(req.id, ERR_OTHER, "Unknown method")),
+        }
+        out
     }
 
-    fn subscribe(&mut self, id: Value) -> String {
-        self.subscribed = true;
-        let extranonce1 = format!("{:08x}", self.extranonce1);
-        ok(
-            id,
-            json!([
-                [["mining.set_difficulty", extranonce1], ["mining.notify", extranonce1]],
-                extranonce1,
-                EXTRANONCE2_SIZE
-            ]),
-        )
+    /// A new job was published. Returns the line to send, if this miner is ready for work.
+    pub fn on_job(&mut self, job: &Job) -> Option<String> {
+        if !self.subscribed {
+            return None;
+        }
+        if job.clean {
+            self.job_diffs.clear();
+        }
+        self.job_diffs.insert(job.id.clone(), self.vardiff.diff());
+        Some(job.notify.clone())
+    }
+
+    /// Periodic check so a miner that finds no shares at all still gets an easier difficulty.
+    pub fn on_tick(&mut self, current: Option<&Job>, now: Instant) -> Vec<String> {
+        if self.subscribed { self.retarget(current, now) } else { Vec::new() }
+    }
+
+    fn retarget(&mut self, current: Option<&Job>, now: Instant) -> Vec<String> {
+        let Some(diff) = self.vardiff.retarget(now) else {
+            return Vec::new();
+        };
+        let mut lines = vec![set_difficulty(diff)];
+        // Miners apply a new difficulty from the next notify on, so repeat the current job.
+        // Shares for it may still arrive at the old difficulty; accept whichever is lower.
+        if let Some(job) = current {
+            let entry = self.job_diffs.entry(job.id.clone()).or_insert(diff);
+            *entry = entry.min(diff);
+            lines.push(job.notify.clone());
+        }
+        lines
     }
 
     fn authorize(&mut self, id: Value, params: &[Value]) -> String {
@@ -83,6 +146,38 @@ impl Session {
             _ => error(id, ERR_UNAUTHORIZED, "Unauthorized worker"),
         }
     }
+
+    fn submit(&mut self, id: Value, params: &[Value]) -> (String, Option<FoundBlock>) {
+        // params: [worker, job id, extranonce2, ntime, nonce]
+        let field = |i: usize| params.get(i).and_then(Value::as_str);
+        let parsed = (|| {
+            let extranonce2 = hex::decode(field(2)?).ok()?;
+            let ntime = u32::from_str_radix(field(3)?, 16).ok()?;
+            let nonce = u32::from_str_radix(field(4)?, 16).ok()?;
+            Some((field(1)?, extranonce2, ntime, nonce))
+        })();
+        let Some((job_id, extranonce2, ntime, nonce)) = parsed else {
+            return (error(id, ERR_OTHER, "Malformed submit"), None);
+        };
+        let (Some(&diff), Some(job)) = (self.job_diffs.get(job_id), self.pool.job(job_id)) else {
+            return (error(id, ERR_JOB_NOT_FOUND, "Job not found"), None);
+        };
+
+        match job.check_share(self.pool.algo, &self.extranonce1, &extranonce2, ntime, nonce) {
+            Err(ShareError::Malformed) => (error(id, ERR_OTHER, "Malformed submit"), None),
+            Err(ShareError::BadNtime) => (error(id, ERR_OTHER, "Invalid ntime"), None),
+            Err(ShareError::Duplicate) => (error(id, ERR_DUPLICATE, "Duplicate share"), None),
+            // A block is a block even if vardiff has pushed the miner above network difficulty.
+            Ok(share) if share.block.is_none() && share.difficulty < diff => {
+                (error(id, ERR_LOW_DIFFICULTY, "Low difficulty share"), None)
+            }
+            Ok(share) => {
+                self.vardiff.on_share();
+                debug!(worker = self.worker.as_deref(), diff, actual = share.difficulty, "share accepted");
+                (ok(id, json!(true)), share.block)
+            }
+        }
+    }
 }
 
 fn ok(id: Value, result: Value) -> String {
@@ -93,53 +188,124 @@ fn error(id: Value, code: i64, message: &str) -> String {
     json!({ "id": id, "result": null, "error": [code, message, null] }).to_string()
 }
 
+fn set_difficulty(diff: f64) -> String {
+    json!({ "id": null, "method": "mining.set_difficulty", "params": [diff] }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{algo::Algo, job::tests::easy_template, vardiff::VarDiffConfig};
 
-    fn roundtrip(session: &mut Session, line: &str) -> Value {
-        serde_json::from_str(&session.handle_line(line).unwrap()).unwrap()
+    const SUBSCRIBE: &str = r#"{"id":1,"method":"mining.subscribe","params":["cpuminer/2.5"]}"#;
+    const AUTHORIZE: &str = r#"{"id":2,"method":"mining.authorize","params":["addr.rig1","x"]}"#;
+
+    fn pool(start_diff: f64) -> Arc<Pool> {
+        let vardiff = VarDiffConfig { start: start_diff, min: 1e-9, max: 1e12, share_target_secs: 15.0 };
+        Arc::new(Pool::new(Algo::Scrypt, vardiff))
+    }
+
+    fn publish(pool: &Pool, id: &str, clean: bool) -> Arc<Job> {
+        let job = Arc::new(Job::new(id.into(), &easy_template(1), &[0x51], clean).unwrap());
+        pool.add_job(job.clone());
+        job
+    }
+
+    fn submit(job_id: &str, nonce: u32) -> String {
+        json!({ "id": 9, "method": "mining.submit", "params": ["addr.rig1", job_id, "00000000", "6553f164", format!("{nonce:08x}")] })
+            .to_string()
+    }
+
+    fn parse(line: &str) -> Value {
+        serde_json::from_str(line).unwrap()
     }
 
     #[test]
-    fn subscribe_returns_extranonce() {
-        let mut s = Session::new();
-        let r = roundtrip(&mut s, r#"{"id":1,"method":"mining.subscribe","params":["cpuminer/2.5"]}"#);
-        assert_eq!(r["id"], 1);
-        assert!(r["error"].is_null());
-        assert_eq!(r["result"][1].as_str().unwrap().len(), 8);
-        assert_eq!(r["result"][2], EXTRANONCE2_SIZE);
+    fn subscribe_sends_extranonce_difficulty_and_job() {
+        let pool = pool(0.5);
+        let job = publish(&pool, "a", true);
+        let mut s = Session::new(pool, Instant::now());
+        let out = s.handle_line(SUBSCRIBE, Some(&job), Instant::now());
+        assert_eq!(out.lines.len(), 3);
+        let reply = parse(&out.lines[0]);
+        assert_eq!(reply["result"][1], "00000001");
+        assert_eq!(reply["result"][2], EXTRANONCE2_SIZE);
+        assert_eq!(parse(&out.lines[1])["params"][0], 0.5);
+        assert_eq!(parse(&out.lines[2])["method"], "mining.notify");
     }
 
     #[test]
     fn sessions_get_distinct_extranonces() {
-        let (mut a, mut b) = (Session::new(), Session::new());
-        let line = r#"{"id":1,"method":"mining.subscribe","params":[]}"#;
-        assert_ne!(roundtrip(&mut a, line)["result"][1], roundtrip(&mut b, line)["result"][1]);
-    }
-
-    #[test]
-    fn authorize_needs_username() {
-        let mut s = Session::new();
-        let r = roundtrip(&mut s, r#"{"id":2,"method":"mining.authorize","params":["", "x"]}"#);
-        assert_eq!(r["error"][0], ERR_UNAUTHORIZED);
-        let r = roundtrip(&mut s, r#"{"id":3,"method":"mining.authorize","params":["addr.rig1", "x"]}"#);
-        assert_eq!(r["result"], true);
+        let pool = pool(1.0);
+        let (a, b) = (Session::new(pool.clone(), Instant::now()), Session::new(pool, Instant::now()));
+        assert_ne!(a.extranonce1, b.extranonce1);
     }
 
     #[test]
     fn submit_requires_subscribe_then_authorize() {
-        let mut s = Session::new();
-        let submit = r#"{"id":4,"method":"mining.submit","params":[]}"#;
-        assert_eq!(roundtrip(&mut s, submit)["error"][0], ERR_NOT_SUBSCRIBED);
-        roundtrip(&mut s, r#"{"id":1,"method":"mining.subscribe","params":[]}"#);
-        assert_eq!(roundtrip(&mut s, submit)["error"][0], ERR_UNAUTHORIZED);
+        let mut s = Session::new(pool(1.0), Instant::now());
+        let now = Instant::now();
+        assert_eq!(parse(&s.handle_line(&submit("a", 1), None, now).lines[0])["error"][0], ERR_NOT_SUBSCRIBED);
+        s.handle_line(SUBSCRIBE, None, now);
+        assert_eq!(parse(&s.handle_line(&submit("a", 1), None, now).lines[0])["error"][0], ERR_UNAUTHORIZED);
+        let denied = s.handle_line(r#"{"id":2,"method":"mining.authorize","params":[""]}"#, None, now);
+        assert_eq!(parse(&denied.lines[0])["error"][0], ERR_UNAUTHORIZED);
+    }
+
+    #[test]
+    fn share_lifecycle() {
+        let pool = pool(1e-9);
+        let job = publish(&pool, "a", true);
+        let now = Instant::now();
+        let mut s = Session::new(pool.clone(), now);
+        s.handle_line(SUBSCRIBE, Some(&job), now);
+        s.handle_line(AUTHORIZE, Some(&job), now);
+
+        let accepted = s.handle_line(&submit("a", 1), Some(&job), now);
+        assert_eq!(parse(&accepted.lines[0])["result"], true);
+        assert!(accepted.block.is_some(), "easy template target accepts every hash");
+
+        let duplicate = s.handle_line(&submit("a", 1), Some(&job), now);
+        assert_eq!(parse(&duplicate.lines[0])["error"][0], ERR_DUPLICATE);
+        assert_eq!(parse(&s.handle_line(&submit("zz", 1), Some(&job), now).lines[0])["error"][0], ERR_JOB_NOT_FOUND);
+
+        // A new chain tip invalidates the old job.
+        let next = publish(&pool, "b", true);
+        s.on_job(&next);
+        assert_eq!(parse(&s.handle_line(&submit("a", 2), Some(&next), now).lines[0])["error"][0], ERR_JOB_NOT_FOUND);
+        assert_eq!(parse(&s.handle_line(&submit("b", 2), Some(&next), now).lines[0])["result"], true);
+    }
+
+    #[test]
+    fn job_from_another_session_is_not_accepted() {
+        let pool = pool(1e-9);
+        let now = Instant::now();
+        let mut s = Session::new(pool.clone(), now);
+        s.handle_line(SUBSCRIBE, None, now);
+        s.handle_line(AUTHORIZE, None, now);
+        let job = publish(&pool, "a", true);
+        assert_eq!(parse(&s.handle_line(&submit("a", 1), Some(&job), now).lines[0])["error"][0], ERR_JOB_NOT_FOUND);
+    }
+
+    #[test]
+    fn burst_of_shares_raises_difficulty_and_resends_the_job() {
+        let pool = pool(1e-9);
+        let job = publish(&pool, "a", true);
+        let now = Instant::now();
+        let mut s = Session::new(pool, now);
+        s.handle_line(SUBSCRIBE, Some(&job), now);
+        s.handle_line(AUTHORIZE, Some(&job), now);
+        let lines: Vec<String> = (0..12).flat_map(|n| s.handle_line(&submit("a", n), Some(&job), now).lines).collect();
+        let methods: Vec<Value> = lines.iter().map(|l| parse(l)["method"].clone()).collect();
+        assert!(methods.contains(&json!("mining.set_difficulty")));
+        assert_eq!(methods.last(), Some(&json!("mining.notify")));
     }
 
     #[test]
     fn garbage_gets_an_error_not_a_panic() {
-        let mut s = Session::new();
-        assert_eq!(roundtrip(&mut s, "not json")["error"][0], ERR_OTHER);
-        assert!(s.handle_line("   ").is_none());
+        let mut s = Session::new(pool(1.0), Instant::now());
+        let now = Instant::now();
+        assert_eq!(parse(&s.handle_line("not json", None, now).lines[0])["error"][0], ERR_OTHER);
+        assert!(s.handle_line("   ", None, now).lines.is_empty());
     }
 }

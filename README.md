@@ -11,7 +11,7 @@ Multi-Coin-Mining-Pool, neu aufgebaut mit [Yiimp](https://github.com/tpruvot/yii
 | `crates/common` | Konfiguration und Coin-Daemon-RPC |
 | `migrations` | PostgreSQL-Schema, wird von `pool-core` beim Start angewendet |
 | `web` | Dashboard (Next.js) |
-| `docker` | Images für Coin-Daemons |
+| `docker` | Images für Coin-Daemons und den Test-Miner |
 | `config/dev.toml` | Konfiguration für die lokale Umgebung |
 | `reference/yiimp` | Yiimp-Quellcode zum Nachschlagen, nicht eingecheckt |
 
@@ -43,6 +43,12 @@ cargo run -p pool-stratum
 
 ```bash
 npm --prefix web run dev
+```
+
+Test-Miner (cpuminer) gegen den laufenden Stratum-Server starten, beenden mit Strg+C:
+
+```bash
+docker compose --profile miner run --rm miner
 ```
 
 Tests:

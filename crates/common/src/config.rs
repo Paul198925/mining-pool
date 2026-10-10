@@ -25,6 +25,13 @@ pub struct Redis {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Stratum {
     pub listen: String,
+    /// Symbol of the coin this listener serves.
+    pub coin: String,
+    pub start_difficulty: f64,
+    pub min_difficulty: f64,
+    pub max_difficulty: f64,
+    /// Vardiff aims for one share per this many seconds.
+    pub share_target_secs: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -35,6 +42,8 @@ pub struct Coin {
     pub rpc_url: String,
     pub rpc_user: String,
     pub rpc_password: String,
+    /// Where block rewards go. Unset means "ask the daemon wallet", which is only sane in dev.
+    pub pool_address: Option<String>,
 }
 
 impl Config {
