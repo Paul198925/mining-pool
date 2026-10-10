@@ -11,6 +11,7 @@ publish = false
 pool-common = { path = "crates/common" }
 
 anyhow = "1"
+cc = "1"
 hex = "0.4"
 futures-util = { version = "0.3", features = ["sink"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }

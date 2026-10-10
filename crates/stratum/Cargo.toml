@@ -17,3 +17,6 @@ sqlx.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+
+[build-dependencies]
+cc.workspace = true
