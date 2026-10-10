@@ -69,6 +69,14 @@ export type MinerExtras = {
   /** Smallest balance that is paid out, base units. */
   minPayout: string | null;
   payoutsEnabled: boolean;
+  /** What the pool's wallet for this coin can spend right now, base units; null if unknown. */
+  walletBalance: string | null;
+  /** pool-core has reached that wallet within the last ten minutes. */
+  walletReachable: boolean;
+  /** Payouts to this account that are queued but not sent yet, base units. */
+  queued: string;
+  /** The same for all accounts of the coin. */
+  coinQueued: string;
   /** Credited in the account's own coin, by block rewards and by the exchange. Base units. */
   earned: { day: string; twoWeeks: string; month: string; all: string };
   mining: MiningRow[];
@@ -83,7 +91,16 @@ export async function getMinerExtras(accountId: string, symbol: string): Promise
   await connection();
   const auxSymbols = COINS.filter((coin) => coin.auxOf).map((coin) => coin.symbol);
   const [coin, earned, mining, balance, found, earnings] = await Promise.all([
-    db().query("SELECT id, min_payout, payouts_enabled FROM coins WHERE symbol = $1", [symbol]),
+    db().query(
+      `SELECT c.min_payout, c.payouts_enabled, c.wallet_balance,
+              COALESCE(c.wallet_checked_at > now() - interval '10 minutes', FALSE) AS wallet_reachable,
+              COALESCE((SELECT sum(p.amount) FROM payouts p
+                        WHERE p.coin_id = c.id AND p.account_id = $2 AND p.status <> 'sent'), 0) AS queued,
+              COALESCE((SELECT sum(p.amount) FROM payouts p
+                        WHERE p.coin_id = c.id AND p.status <> 'sent'), 0) AS coin_queued
+       FROM coins c WHERE c.symbol = $1`,
+      [symbol, accountId],
+    ),
     db().query(
       `SELECT COALESCE(sum(l.amount) FILTER (WHERE l.created_at > now() - interval '24 hours'), 0) AS day,
               COALESCE(sum(l.amount) FILTER (WHERE l.created_at > now() - interval '14 days'), 0) AS two_weeks,
@@ -166,6 +183,10 @@ export async function getMinerExtras(accountId: string, symbol: string): Promise
   return {
     minPayout: settings?.min_payout ?? null,
     payoutsEnabled: settings?.payouts_enabled ?? true,
+    walletBalance: settings?.wallet_balance ?? null,
+    walletReachable: settings?.wallet_reachable ?? false,
+    queued: settings?.queued ?? "0",
+    coinQueued: settings?.coin_queued ?? "0",
     earned: { day: periods.day, twoWeeks: periods.two_weeks, month: periods.month, all: periods.all_time },
     mining: mining.rows.map((r) => ({
       symbol: r.symbol,

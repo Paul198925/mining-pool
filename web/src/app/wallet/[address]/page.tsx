@@ -108,6 +108,43 @@ async function Wallet({ params }: Pick<PageProps<"/wallet/[address]">, "params">
   );
 }
 
+/**
+ * Reasons why this account's payout may be late, in the miner's words. Nothing here
+ * means money is lost: a balance stays the miner's until it is paid.
+ */
+function payoutWarnings(account: Account): string[] {
+  const { symbol } = account;
+  const warnings: string[] = [];
+  const balance = BigInt(account.balance);
+  const queued = BigInt(account.queued);
+  // What this account is waiting for: a payout already queued, or a balance that is due.
+  const due = queued + (account.minPayout !== null && balance >= BigInt(account.minPayout) ? balance : BigInt(0));
+  if (due > BigInt(0)) {
+    if (!account.payoutsEnabled) {
+      warnings.push(`Payouts in ${symbol} are paused at the moment. Your ${formatAmount(due.toString())} ${symbol} are paid as soon as they are switched on again.`);
+    } else if (!account.walletReachable) {
+      warnings.push(`The pool's ${symbol} wallet cannot be reached at the moment, so payouts are delayed. Your ${formatAmount(due.toString())} ${symbol} are paid once it is back.`);
+    } else if (account.walletBalance !== null) {
+      const wallet = BigInt(account.walletBalance);
+      // The wallet sends a round's payouts in one transaction: if it is short for all
+      // of them, nobody in that round is paid yet.
+      const needed = BigInt(account.coinQueued) > due ? BigInt(account.coinQueued) : due;
+      if (wallet < needed) {
+        warnings.push(
+          `The pool's wallet does not hold enough ${symbol} right now to pay this round (${formatAmount(wallet.toString())} of ${formatAmount(needed.toString())} ${symbol} available). Your ${formatAmount(due.toString())} ${symbol} stay yours and are paid automatically as soon as the wallet has enough, usually when recent blocks have matured.`,
+        );
+      }
+    }
+  }
+  if (account.waiting.length > 0) {
+    const amounts = account.waiting.map((item) => `${formatAmount(item.amount)} ${item.symbol}`).join(", ");
+    warnings.push(
+      `${amounts} are waiting to be swapped into ${symbol}. The pool swaps only between its miners, so this takes until someone wants those coins for ${symbol}; they are not paid out in the meantime.`,
+    );
+  }
+  return warnings;
+}
+
 /** Balances and totals of one account, in the coin it is paid in. */
 function Summary({ account }: { account: Account }) {
   const { symbol } = account;
@@ -123,6 +160,11 @@ function Summary({ account }: { account: Account }) {
   ];
   return (
     <Box title={<>Earnings Summary: {account.address}</>}>
+      {payoutWarnings(account).map((warning) => (
+        <p key={warning} role="status" className="alert">
+          {warning}
+        </p>
+      ))}
       <table className="datagrid">
         <thead>
           <tr>

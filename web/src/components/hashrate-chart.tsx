@@ -6,7 +6,7 @@ import { formatHashrate } from "@/lib/format";
 import type { HashratePoint } from "@/lib/queries";
 
 const HEIGHT = 180;
-const MARGIN = { top: 12, right: 12, bottom: 22, left: 64 };
+const MARGIN = { top: 12, right: 12, bottom: 22, left: 92 };
 const Y_TICKS = 2;
 
 const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
