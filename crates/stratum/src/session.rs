@@ -37,6 +37,8 @@ pub struct Output {
     pub share: Option<AcceptedShare>,
     /// The miner wants to log in; answer with [`Session::finish_authorize`].
     pub auth: Option<AuthRequest>,
+    /// The line was unreadable or a share that was not accepted.
+    pub rejected: bool,
 }
 
 pub struct AcceptedShare {
@@ -100,6 +102,7 @@ impl Session {
             Ok(req) => req,
             Err(_) => {
                 out.lines.push(error(Value::Null, ERR_OTHER, "Malformed request"));
+                out.rejected = true;
                 return out;
             }
         };
@@ -137,6 +140,7 @@ impl Session {
             "mining.submit" => {
                 let (reply, share) = self.submit(req.id, &req.params);
                 out.lines.push(reply);
+                out.rejected = share.is_none();
                 out.share = share;
                 out.lines.extend(self.retarget(current, now));
             }

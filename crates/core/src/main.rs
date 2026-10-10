@@ -3,6 +3,7 @@ mod exchange;
 mod payouts;
 mod pplns;
 mod prices;
+mod retention;
 mod stats;
 mod wallet;
 
@@ -88,6 +89,7 @@ async fn main() -> Result<()> {
     }
 
     tokio::spawn(run_exchange(db.clone(), cfg.coins.clone()));
+    tokio::spawn(retention::run(db.clone()));
 
     // Where the wallets are is fixed at startup. When an admin moves one, finish the
     // round in progress and leave; the supervisor starts us again with the new layout.

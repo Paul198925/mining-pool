@@ -2,6 +2,7 @@ mod accounts;
 mod algo;
 mod backend;
 mod chain;
+mod guard;
 mod instance;
 mod job;
 mod kawpow;
@@ -38,6 +39,7 @@ use crate::{
     algo::Algo,
     backend::{ApiClient, Backend},
     chain::Chain,
+    guard::GUARD,
     job::{FoundBlock, Job},
     pool::{Pool, Port},
     recorder::{BlockEvent, Recorder, ShareEvent, Sink},
@@ -47,6 +49,11 @@ use crate::{
 
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+/// A connection that has not logged in by then is not a miner.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(60);
+/// This many unusable lines or refused shares in a row end the connection and ban its
+/// address for a while. A miner with a wrong setting gets there too, and should.
+const MAX_REJECTS_IN_A_ROW: u32 = 100;
 const VARDIFF_TICK: Duration = Duration::from_secs(30);
 
 type JobFeed = watch::Receiver<Option<Arc<Job>>>;
@@ -236,11 +243,20 @@ async fn start_listener(
         loop {
             match listener.accept().await {
                 Ok((stream, peer)) => {
+                    let permit = match GUARD.admit(peer.ip(), Instant::now()) {
+                        Ok(permit) => permit,
+                        Err(reason) => {
+                            // Dropping the stream closes it; nothing is owed to a refused peer.
+                            debug!(%peer, ?reason, "connection refused");
+                            continue;
+                        }
+                    };
                     let ctx = ctx.clone();
                     tokio::spawn(async move {
                         if let Err(err) = serve(stream, peer, ctx).await {
                             debug!(%peer, "connection closed: {err:#}");
                         }
+                        drop(permit);
                     });
                 }
                 Err(err) => {
@@ -281,6 +297,8 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
     let mut coin: Option<CoinCtx> = None;
     let mut tick = tokio::time::interval(VARDIFF_TICK);
     let mut last_message = tokio::time::Instant::now();
+    let connected = tokio::time::Instant::now();
+    let mut rejects_in_a_row = 0u32;
     debug!(%peer, "connected");
 
     loop {
@@ -289,6 +307,12 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
                 let Some(line) = line else { return Ok(()) };
                 last_message = tokio::time::Instant::now();
                 let mut out = session.handle_line(&line?, current_job(&coin).as_deref(), Instant::now());
+                rejects_in_a_row = if out.rejected { rejects_in_a_row + 1 } else { 0 };
+                if rejects_in_a_row >= MAX_REJECTS_IN_A_ROW {
+                    warn!(%peer, "only refused shares or unreadable lines, closing and banning the address for a while");
+                    GUARD.ban(peer.ip(), Instant::now());
+                    return Ok(());
+                }
                 if let (Some(share), Some(coin)) = (out.share, &coin) {
                     record_share(coin, share);
                 }
@@ -315,6 +339,10 @@ async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
             _ = tick.tick() => session.on_tick(current_job(&coin).as_deref(), Instant::now()),
             _ = tokio::time::sleep_until(last_message + IDLE_TIMEOUT) => {
                 warn!(%peer, "idle timeout");
+                return Ok(());
+            }
+            _ = tokio::time::sleep_until(connected + LOGIN_TIMEOUT), if coin.is_none() => {
+                debug!(%peer, "no login, closing");
                 return Ok(());
             }
         };
