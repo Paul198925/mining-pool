@@ -21,15 +21,17 @@ pub async fn publish_settings(db: &PgPool, coin_id: i32, coin: &Coin, accounting
     Ok(())
 }
 
-pub async fn refresh_chain_stats(db: &PgPool, rpc: &RpcClient, coin_id: i32) -> Result<()> {
+pub async fn refresh_chain_stats(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result<()> {
     let info: Value = rpc.call("getmininginfo", json!([])).await?;
+    // Multi-algo chains such as Xaya report one value per algorithm.
+    let per_algo = |field: &str| info[field].as_f64().or_else(|| info[field][&coin.algo].as_f64());
     sqlx::query(
         "UPDATE coins SET height = $2, network_difficulty = $3, network_hashrate = $4, stats_at = now() WHERE id = $1",
     )
     .bind(coin_id)
     .bind(info["blocks"].as_i64())
-    .bind(info["difficulty"].as_f64())
-    .bind(info["networkhashps"].as_f64())
+    .bind(per_algo("difficulty"))
+    .bind(per_algo("networkhashps"))
     .execute(db)
     .await?;
     Ok(())

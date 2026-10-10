@@ -62,12 +62,46 @@ services:
       - -regtest
       - -listen=1
 
-  # Test miner, started on demand: docker compose --profile miner up miner
+  # Xaya regtest. The healthcheck doubles as wallet setup: the node starts without a wallet.
+  xaya:
+    build: docker/xaya
+    platform: linux/amd64
+    command:
+      - -regtest
+      - -listen=0
+      - -fallbackfee=0.001
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcport=18493
+      - -rpcuser=pool
+      - -rpcpassword=pooldev
+    ports:
+      - "127.0.0.1:18493:18493"
+    volumes:
+      - xaya:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpassword=pooldev getwalletinfo
+          || xaya-cli -regtest -rpcport=18493 -rpcuser=pool -rpcpassword=pooldev
+          -named createwallet wallet_name=pool load_on_startup=true
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Test miners, started on demand, e.g.: docker compose --profile miner run --rm miner
   miner:
     build: docker/cpuminer
     profiles: [miner]
     command: ["-a", "scrypt", "-o", "stratum+tcp://host.docker.internal:3333", "-u", "${MINER_ADDRESS:-unset}.rig1", "-p", "${MINER_PASSWORD:-x}", "-t", "1"]
 
+  miner-xaya:
+    build: docker/cpuminer-xaya
+    profiles: [miner]
+    command: ["-a", "neoscrypt", "-o", "stratum+tcp://host.docker.internal:3334", "-u", "${MINER_ADDRESS:-unset}.rig1", "-p", "${MINER_PASSWORD:-x}", "-t", "1"]
+
 volumes:
   pgdata:
   dogecoin:
+  xaya:

@@ -56,7 +56,7 @@ async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) 
 
     loop {
         tick.tick().await;
-        if let Err(err) = stats::refresh_chain_stats(&db, &rpc, coin_id).await {
+        if let Err(err) = stats::refresh_chain_stats(&db, &rpc, coin_id, &coin).await {
             warn!(coin = %coin.symbol, "refreshing chain stats failed: {err:#}");
         }
         if let Err(err) = blocks::credit_new_blocks(&db, coin_id, &accounting).await {

@@ -1,5 +1,6 @@
 mod accounts;
 mod algo;
+mod chain;
 mod job;
 mod pool;
 mod recorder;
@@ -32,6 +33,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     accounts::WorkerIds,
     algo::Algo,
+    chain::Chain,
     job::{FoundBlock, Job},
     pool::Pool,
     recorder::{BlockEvent, Recorder, ShareEvent},
@@ -93,8 +95,10 @@ async fn start_listener(settings: &Stratum, coin: &Coin, db: PgPool) -> Result<R
     sqlx::query("UPDATE coins SET stratum_port = $2 WHERE id = $1").bind(coin_id).bind(port).execute(&db).await?;
     let rpc = RpcClient::new(coin)?;
     let payout_script = payout_script(&rpc, coin).await?;
+    let chain = Chain::from_name(&coin.chain)?;
     let pool = Arc::new(Pool::new(
         Algo::from_name(&coin.algo)?,
+        chain,
         VarDiffConfig {
             start: settings.start_difficulty,
             min: settings.min_difficulty,
@@ -104,7 +108,8 @@ async fn start_listener(settings: &Stratum, coin: &Coin, db: PgPool) -> Result<R
     ));
 
     let (job_tx, job_rx) = watch::channel(None);
-    tokio::spawn(template::run(rpc.clone(), pool.clone(), payout_script, job_tx));
+    let request = chain.template_request(&coin.algo);
+    tokio::spawn(template::run(rpc.clone(), pool.clone(), request, payout_script, job_tx));
     let ctx = Server { pool, rpc, db, coin_id, recorder: recorder.clone(), jobs: job_rx };
 
     let listener = TcpListener::bind(&settings.listen).await.with_context(|| format!("binding {}", settings.listen))?;

@@ -8,11 +8,12 @@ use std::{
 
 use tokio::sync::Notify;
 
-use crate::{algo::Algo, job::Job, vardiff::VarDiffConfig};
+use crate::{algo::Algo, chain::Chain, job::Job, vardiff::VarDiffConfig};
 
 /// State shared by every connection of one stratum listener.
 pub struct Pool {
     pub algo: Algo,
+    pub chain: Chain,
     pub vardiff: VarDiffConfig,
     /// Wakes the template poller ahead of its timer, e.g. right after we found a block.
     pub refresh: Notify,
@@ -21,12 +22,21 @@ pub struct Pool {
 }
 
 impl Pool {
-    pub fn new(algo: Algo, vardiff: VarDiffConfig) -> Self {
-        Self { algo, vardiff, refresh: Notify::new(), jobs: RwLock::new(HashMap::new()), next_extranonce1: AtomicU32::new(1) }
+    pub fn new(algo: Algo, chain: Chain, vardiff: VarDiffConfig) -> Self {
+        Self {
+            algo,
+            chain,
+            vardiff,
+            refresh: Notify::new(),
+            jobs: RwLock::new(HashMap::new()),
+            next_extranonce1: AtomicU32::new(1),
+        }
     }
 
-    pub fn next_extranonce1(&self) -> [u8; 4] {
-        self.next_extranonce1.fetch_add(1, Ordering::Relaxed).to_be_bytes()
+    /// Distinct per connection until the counter wraps around the chain's extranonce size.
+    pub fn next_extranonce1(&self) -> Vec<u8> {
+        let counter = self.next_extranonce1.fetch_add(1, Ordering::Relaxed).to_be_bytes();
+        counter[4 - self.chain.extranonce1_size()..].to_vec()
     }
 
     pub fn job(&self, id: &str) -> Option<Arc<Job>> {

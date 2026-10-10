@@ -4,7 +4,7 @@ use std::{
 };
 
 use pool_common::rpc::RpcClient;
-use serde_json::json;
+use serde_json::Value;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -18,7 +18,13 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Polls the daemon for block templates and publishes a job whenever the work changes.
-pub async fn run(rpc: RpcClient, pool: Arc<Pool>, payout_script: Vec<u8>, jobs: watch::Sender<Option<Arc<Job>>>) {
+pub async fn run(
+    rpc: RpcClient,
+    pool: Arc<Pool>,
+    request: Value,
+    payout_script: Vec<u8>,
+    jobs: watch::Sender<Option<Arc<Job>>>,
+) {
     let mut last: Option<(String, Vec<String>, Instant)> = None;
     let mut last_error = None;
     let mut next_id = 1u64;
@@ -29,7 +35,7 @@ pub async fn run(rpc: RpcClient, pool: Arc<Pool>, payout_script: Vec<u8>, jobs: 
             _ = tick.tick() => {}
             _ = pool.refresh.notified() => {}
         }
-        let template: BlockTemplate = match rpc.call("getblocktemplate", json!([{}])).await {
+        let template: BlockTemplate = match rpc.call("getblocktemplate", request.clone()).await {
             Ok(template) => template,
             Err(err) => {
                 let message = format!("{err:#}");
@@ -54,7 +60,7 @@ pub async fn run(rpc: RpcClient, pool: Arc<Pool>, payout_script: Vec<u8>, jobs: 
             continue;
         }
 
-        match Job::new(format!("{next_id:x}"), &template, &payout_script, clean) {
+        match Job::new(format!("{next_id:x}"), pool.chain, &template, &payout_script, clean) {
             Ok(job) => {
                 next_id += 1;
                 if clean {

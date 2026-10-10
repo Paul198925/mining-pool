@@ -52,6 +52,9 @@ pub struct Coin {
     pub symbol: String,
     pub name: String,
     pub algo: String,
+    /// Block layout family: "bitcoin" (default) or "xaya".
+    #[serde(default = "default_chain")]
+    pub chain: String,
     pub rpc_url: String,
     pub rpc_user: String,
     pub rpc_password: String,
@@ -61,6 +64,10 @@ pub struct Coin {
     pub block_maturity: i64,
     /// Balances below this many coins are not paid out yet.
     pub min_payout: f64,
+}
+
+fn default_chain() -> String {
+    "bitcoin".into()
 }
 
 impl Config {

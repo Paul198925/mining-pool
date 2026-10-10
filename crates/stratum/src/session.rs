@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::{
     accounts::WorkerIds,
-    job::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE, FoundBlock, Job, ShareError},
+    job::{FoundBlock, Job, ShareError},
     pool::Pool,
     vardiff::VarDiff,
 };
@@ -53,7 +53,7 @@ pub struct AuthRequest {
 /// Per-connection Stratum V1 state. Pure request/response logic, no I/O.
 pub struct Session {
     pool: Arc<Pool>,
-    extranonce1: [u8; EXTRANONCE1_SIZE],
+    extranonce1: Vec<u8>,
     subscribed: bool,
     worker: Option<WorkerIds>,
     vardiff: VarDiff,
@@ -89,13 +89,13 @@ impl Session {
         match req.method.as_str() {
             "mining.subscribe" => {
                 self.subscribed = true;
-                let extranonce1 = hex::encode(self.extranonce1);
+                let extranonce1 = hex::encode(&self.extranonce1);
                 out.lines.push(ok(
                     req.id,
                     json!([
                         [["mining.set_difficulty", extranonce1], ["mining.notify", extranonce1]],
                         extranonce1,
-                        EXTRANONCE2_SIZE
+                        self.pool.chain.extranonce2_size()
                     ]),
                 ));
                 out.lines.push(set_difficulty(self.vardiff.diff()));
@@ -221,7 +221,7 @@ fn set_difficulty(diff: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{algo::Algo, job::tests::easy_template, vardiff::VarDiffConfig};
+    use crate::{algo::Algo, chain::Chain, job::tests::easy_template, vardiff::VarDiffConfig};
 
     const SUBSCRIBE: &str = r#"{"id":1,"method":"mining.subscribe","params":["cpuminer/2.5"]}"#;
     const AUTHORIZE: &str = r#"{"id":2,"method":"mining.authorize","params":["addr.rig1","x"]}"#;
@@ -235,11 +235,11 @@ mod tests {
 
     fn pool(start_diff: f64) -> Arc<Pool> {
         let vardiff = VarDiffConfig { start: start_diff, min: 1e-9, max: 1e12, share_target_secs: 15.0 };
-        Arc::new(Pool::new(Algo::Scrypt, vardiff))
+        Arc::new(Pool::new(Algo::Scrypt, Chain::Bitcoin, vardiff))
     }
 
     fn publish(pool: &Pool, id: &str, clean: bool) -> Arc<Job> {
-        let job = Arc::new(Job::new(id.into(), &easy_template(1), &[0x51], clean).unwrap());
+        let job = Arc::new(Job::new(id.into(), Chain::Bitcoin, &easy_template(1), &[0x51], clean).unwrap());
         pool.add_job(job.clone());
         job
     }
@@ -262,7 +262,7 @@ mod tests {
         assert_eq!(out.lines.len(), 3);
         let reply = parse(&out.lines[0]);
         assert_eq!(reply["result"][1], "00000001");
-        assert_eq!(reply["result"][2], EXTRANONCE2_SIZE);
+        assert_eq!(reply["result"][2], 4);
         assert_eq!(parse(&out.lines[1])["params"][0], 0.5);
         assert_eq!(parse(&out.lines[2])["method"], "mining.notify");
     }
