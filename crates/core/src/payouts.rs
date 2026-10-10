@@ -26,7 +26,14 @@ const RECONCILE_LOOKBACK: u32 = 1000;
 /// The wallet takes the transaction fee out of the amounts it sends, split evenly
 /// between the recipients, so the pool never pays for payouts.
 pub async fn run(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result<()> {
+    // Always: a batch that was already handed to the wallet must be accounted for.
     reconcile(db, rpc, coin_id).await?;
+    let enabled: bool =
+        sqlx::query_scalar("SELECT payouts_enabled FROM coins WHERE id = $1").bind(coin_id).fetch_one(db).await?;
+    if !enabled {
+        // Switched off in the admin area: nothing new is queued or sent, balances stay.
+        return Ok(());
+    }
     create(db, coin_id).await?;
     send(db, rpc, coin_id, coin).await
 }

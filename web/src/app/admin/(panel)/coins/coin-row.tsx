@@ -9,6 +9,7 @@ export type AdminCoin = {
   name: string;
   algo: string;
   enabled: boolean;
+  payoutsEnabled: boolean;
   poolFeePercent: number | null;
   soloFeePercent: number | null;
   /** In coins, not base units. */
@@ -43,6 +44,15 @@ export function CoinRow({ coin }: { coin: AdminCoin }) {
       <td>{coin.algo}</td>
       <td>
         <input form={form} type="checkbox" name="enabled" defaultChecked={coin.enabled} aria-label={`${coin.symbol} mining on`} />
+      </td>
+      <td>
+        <input
+          form={form}
+          type="checkbox"
+          name="payouts"
+          defaultChecked={coin.payoutsEnabled}
+          aria-label={`${coin.symbol} payouts on`}
+        />
       </td>
       {number("poolFee", coin.poolFeePercent, "pool fee percent")}
       {number("soloFee", coin.soloFeePercent, "solo fee percent")}

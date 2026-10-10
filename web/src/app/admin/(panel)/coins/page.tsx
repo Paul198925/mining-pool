@@ -22,8 +22,9 @@ export default function CoinsPage() {
 
 async function getCoins(): Promise<{ coins: AdminCoin[]; unknown: string[] }> {
   const [rows, servers, addresses] = await Promise.all([
-    db().query("SELECT symbol, name, algo, enabled, pool_fee_percent, solo_fee_percent, min_payout FROM coins ORDER BY symbol"),
-    db().query("SELECT region, coins FROM stratum_instances WHERE token_hash IS NOT NULL ORDER BY id"),
+    db().query("SELECT symbol, name, algo, enabled, payouts_enabled, pool_fee_percent, solo_fee_percent, min_payout FROM coins ORDER BY symbol"),
+    // A node that holds the pool wallet serves miners too.
+    db().query("SELECT region, coins || wallets AS coins FROM stratum_instances WHERE token_hash IS NOT NULL ORDER BY id"),
     poolAddresses(),
   ]);
   const coins = rows.rows.map((r) => ({
@@ -31,6 +32,7 @@ async function getCoins(): Promise<{ coins: AdminCoin[]; unknown: string[] }> {
     name: r.name,
     algo: r.algo,
     enabled: r.enabled,
+    payoutsEnabled: r.payouts_enabled,
     poolFeePercent: r.pool_fee_percent,
     soloFeePercent: r.solo_fee_percent,
     minPayout: r.min_payout === null ? null : Number(r.min_payout) / 1e8,
@@ -57,6 +59,7 @@ async function Coins() {
               <th>Coin</th>
               <th>Algo</th>
               <th>Mining on</th>
+              <th>Payouts on</th>
               <th className="right">Pool fee %</th>
               <th className="right">Solo fee %</th>
               <th className="right">Minimum payout</th>
@@ -77,6 +80,11 @@ async function Coins() {
           A coin can be mined when mining is on, the pool wallet is connected and at least one server runs a node for
           it. Switching a coin off stops mining on the stratum servers within about a minute and hides it from the
           website; open balances are still paid out.
+        </li>
+        <li>
+          With payouts off, nothing is sent from the coin&apos;s wallet. Miners keep earning and their balances
+          stay; they are paid in the first round after payouts are switched on again. A payment the wallet has
+          already been asked to send is not stopped.
         </li>
         <li>Fees apply to blocks found from now on. The minimum payout applies from the next payout round.</li>
         <li>Which server runs a node is set on the Servers page.</li>
