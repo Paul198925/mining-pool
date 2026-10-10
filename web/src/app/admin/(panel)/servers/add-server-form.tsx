@@ -103,11 +103,34 @@ export function AddServerForm({ coins }: { coins: CoinChoice[] }) {
   );
 }
 
-export function EditServerForm({ id, coins, roles }: { id: number; coins: CoinChoice[]; roles: Roles }) {
+export function EditServerForm({
+  id,
+  region,
+  coins,
+  roles,
+}: {
+  id: number;
+  region: string;
+  coins: CoinChoice[];
+  roles: Roles;
+}) {
   const [state, action, pending] = useActionState<UpdateServerState, FormData>(updateServer, {});
   return (
     <form action={action} className="grid gap-2 p-1">
       <input type="hidden" name="id" value={id} />
+      <label>
+        <b>Name</b>{" "}
+        <input
+          name="region"
+          className="text-input"
+          defaultValue={region}
+          maxLength={40}
+          size={24}
+          aria-label={`Name of server ${id}`}
+          title="Shown to miners where they choose a server, e.g. Europe"
+          required
+        />
+      </label>
       <RoleChoices coins={coins} roles={roles} />
       {state.error && (
         <p role="alert" className="alert">

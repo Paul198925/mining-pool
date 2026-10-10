@@ -90,6 +90,8 @@ export async function updateServer(_previous: UpdateServerState, form: FormData)
   await requireAdmin();
   const id = Number(form.get("id"));
   if (!Number.isInteger(id)) return { error: "Unknown server." };
+  const region = String(form.get("region") ?? "").trim();
+  if (region.length < 1 || region.length > 40) return { error: "Give the server a name of up to 40 characters." };
   const chosen = roles(form);
   const { stratum, coins, wallets, core } = chosen;
   const conflict = await taken(chosen, id);
@@ -103,6 +105,8 @@ export async function updateServer(_previous: UpdateServerState, form: FormData)
       needsConfirmation: true,
     };
   }
+  // The name is only a label: changing it needs no update command on the server.
+  await db().query("UPDATE stratum_instances SET region = $2 WHERE id = $1", [id, region]);
   await db().query(
     `UPDATE stratum_instances SET stratum = $2, coins = $3, wallets = $4, core = $5, config_version = config_version + 1
      WHERE id = $1 AND (stratum, coins, wallets, core) IS DISTINCT FROM ($2, $3::text[], $4::text[], $5)`,

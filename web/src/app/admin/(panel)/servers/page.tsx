@@ -124,6 +124,7 @@ async function Servers() {
                         <summary>{runs(instance)}</summary>
                         <EditServerForm
                           id={instance.id}
+                          region={instance.region}
                           coins={choices}
                           roles={{
                             stratum: instance.stratum,
@@ -159,7 +160,7 @@ async function Servers() {
         <ul>
           <li>
             Click a server&apos;s name for its load, disk and the logs of its services. Click what a server runs to
-            change it. The change is applied when you run this on that server as root;
+            rename it or change what it runs. The change is applied when you run this on that server as root;
             the same command also updates its services to the latest version:
           </li>
         </ul>
