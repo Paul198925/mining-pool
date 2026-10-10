@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { Box, Empty, Skeleton } from "@/components/ui";
 import { getServers } from "@/lib/admin-queries";
-import { COINS, poolAddress } from "@/lib/catalog";
+import { COINS, poolAddresses } from "@/lib/catalog";
 import { formatAge, formatHashrate } from "@/lib/format";
 
 import { removeServer } from "./actions";
@@ -36,11 +36,12 @@ const ENROLLMENT_NOTE = {
 
 async function Servers() {
   const { instances, nodes } = await getServers();
+  const addresses = await poolAddresses();
   const choices = COINS.map((coin) => ({
     symbol: coin.symbol,
     name: coin.name,
     algo: coin.algo,
-    available: poolAddress(coin.symbol) !== null,
+    available: Boolean(addresses[coin.symbol]),
   }));
   return (
     <>

@@ -10,13 +10,14 @@ RUN apt-get update \
  && curl -fsSL -o /tmp/rod.zip \
       "https://github.com/SpaceXpanse/rod-core-wallet/releases/download/v${VERSION}/spacexpanse-${VERSION}-linux64.zip" \
  && echo "${SHA256}  /tmp/rod.zip" | sha256sum -c - \
- && unzip -j /tmp/rod.zip spacexpansed spacexpanse-cli -d /usr/local/bin \
- && chmod +x /usr/local/bin/spacexpansed /usr/local/bin/spacexpanse-cli \
+ && unzip -j /tmp/rod.zip spacexpansed spacexpanse-cli spacexpanse-wallet -d /usr/local/bin \
+ && chmod +x /usr/local/bin/spacexpansed /usr/local/bin/spacexpanse-cli /usr/local/bin/spacexpanse-wallet \
  && rm /tmp/rod.zip \
  && apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* \
  && userdel -r ubuntu && useradd --create-home --uid 1000 coin \
  && mkdir /data && chown coin:coin /data
 
+COPY --chmod=755 entrypoint.sh /usr/local/bin/pool-entrypoint
 USER coin
 VOLUME /data
-ENTRYPOINT ["spacexpansed", "-datadir=/data", "-printtoconsole"]
+ENTRYPOINT ["pool-entrypoint"]

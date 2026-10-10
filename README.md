@@ -126,8 +126,10 @@ Die Web-App braucht dafür zusätzlich:
 |---|---|
 | `POOL_PUBLIC_URL` | Adresse, unter der die Server den Pool erreichen, z. B. `https://pool.example` |
 | `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-xaya`, `...-spacexpanse` |
-| `POOL_ADDRESS_<SYMBOL>` | Adresse des Pool-Wallets je Coin; ohne sie lässt sich die Coin nicht auswählen |
+| `POOL_ADDRESS_<SYMBOL>` | optional: überschreibt die Adresse, die `pool-core` aus dem Pool-Wallet veröffentlicht |
 | `POOL_NETWORK` | `regtest` nur für Tests, sonst weglassen |
+
+Eine Coin lässt sich erst auswählen, wenn `pool-core` ihren Wallet-Node erreicht und eine Adresse des Pool-Wallets veröffentlicht hat. Der Wallet-Node läuft mit `POOL_WALLET=<Name>`; damit legt das Image das Wallet beim ersten Start an.
 
 Welche Coins es gibt und wie ihre Nodes gestartet werden, steht in `web/src/lib/catalog.ts`.
 

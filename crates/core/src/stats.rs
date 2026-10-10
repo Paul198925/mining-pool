@@ -1,7 +1,7 @@
 use anyhow::Result;
 use pool_common::{
     config::{Accounting, Coin},
-    rpc::RpcClient,
+    rpc::{DaemonError, RpcClient},
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -47,4 +47,26 @@ pub async fn refresh_wallet_balance(db: &PgPool, rpc: &RpcClient, coin_id: i32) 
         .execute(db)
         .await?;
     Ok(())
+}
+
+/// Makes sure the coin has a reward address, taking a fresh one from the pool wallet if
+/// none is set yet. Self-enrolling servers get the address from here.
+/// Returns whether the coin has an address now.
+pub async fn publish_pool_address(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result<bool> {
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT pool_address FROM coins WHERE id = $1").bind(coin_id).fetch_one(db).await?;
+    let address = match (&coin.pool_address, stored) {
+        // An address from the configuration always wins.
+        (Some(configured), stored) if stored.as_ref() != Some(configured) => configured.clone(),
+        (_, Some(_)) => return Ok(true),
+        (_, None) => match rpc.call("getnewaddress", json!(["pool", "legacy"])).await {
+            Ok(address) => address,
+            // Older daemons know no address types.
+            Err(err) if err.downcast_ref::<DaemonError>().is_some() => rpc.call("getnewaddress", json!(["pool"])).await?,
+            Err(err) => return Err(err),
+        },
+    };
+    sqlx::query("UPDATE coins SET pool_address = $2 WHERE id = $1").bind(coin_id).bind(&address).execute(db).await?;
+    tracing::info!(coin = %coin.symbol, %address, "pool address published");
+    Ok(true)
 }

@@ -29,7 +29,7 @@ export function AddServerForm({ coins }: { coins: CoinChoice[] }) {
         </span>
         <div className="flex flex-wrap gap-x-4 gap-y-1">
           {coins.map((coin) => (
-            <label key={coin.symbol} title={coin.available ? undefined : "No pool address configured"}>
+            <label key={coin.symbol} title={coin.available ? undefined : "Pool wallet not connected"}>
               <input type="checkbox" name={`coin-${coin.symbol}`} disabled={!coin.available} /> {coin.name} (
               {coin.symbol}, {coin.algo})
             </label>
@@ -39,10 +39,9 @@ export function AddServerForm({ coins }: { coins: CoinChoice[] }) {
       {unavailable.length > 0 && (
         <p className="alert">
           {unavailable.length === coins.length ? "No coin can be chosen yet. " : ""}
-          {unavailable.map((coin) => coin.symbol).join(", ")}: the address of the pool wallet is missing. Block rewards
-          are paid to that address, so a server cannot mine the coin without it. Set{" "}
-          {unavailable.map((coin) => `POOL_ADDRESS_${coin.symbol}`).join(", ")} in the web app&apos;s environment and
-          redeploy.
+          {unavailable.map((coin) => coin.symbol).join(", ")}: the pool wallet is not connected yet. Block rewards are
+          paid to an address of that wallet, so a server cannot mine the coin without it. The coin becomes available
+          as soon as pool-core reaches the coin&apos;s wallet node.
         </p>
       )}
       <div>

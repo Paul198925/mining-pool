@@ -49,6 +49,7 @@ async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) 
     let payout_interval = Duration::from_secs(accounting.payout_interval_secs);
     let mut last_payout = Instant::now();
     let mut tick = tokio::time::interval(BLOCK_INTERVAL);
+    let mut has_address = false;
     if let Err(err) = stats::publish_settings(&db, coin_id, &coin, &accounting).await {
         error!(coin = %coin.symbol, "publishing settings failed: {err:#}");
     }
@@ -58,6 +59,10 @@ async fn run_coin(db: PgPool, coin_id: i32, coin: Coin, accounting: Accounting) 
         tick.tick().await;
         if let Err(err) = stats::refresh_chain_stats(&db, &rpc, coin_id, &coin).await {
             warn!(coin = %coin.symbol, "refreshing chain stats failed: {err:#}");
+        }
+        if !has_address {
+            // Fails quietly until the wallet node is reachable; the stats warning above covers that.
+            has_address = stats::publish_pool_address(&db, &rpc, coin_id, &coin).await.unwrap_or(false);
         }
         if let Err(err) = stats::refresh_wallet_balance(&db, &rpc, coin_id).await {
             warn!(coin = %coin.symbol, "reading the wallet balance failed: {err:#}");

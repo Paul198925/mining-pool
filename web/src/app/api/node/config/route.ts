@@ -1,4 +1,4 @@
-import { ALGOS, coinSpec, nodeConfig } from "@/lib/catalog";
+import { ALGOS, coinSpec, nodeConfig, poolAddresses } from "@/lib/catalog";
 import { db } from "@/lib/db";
 import { authenticateNode, unauthorized } from "@/lib/node-auth";
 
@@ -17,5 +17,5 @@ export async function GET(request: Request) {
       [coin.symbol, coin.name, coin.algo, ALGOS[coin.algo].port],
     );
   }
-  return Response.json(nodeConfig(node));
+  return Response.json(nodeConfig(node, await poolAddresses()));
 }

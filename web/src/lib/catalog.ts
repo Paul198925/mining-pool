@@ -4,6 +4,8 @@
  * turns this into the server's configuration and its docker-compose file.
  */
 
+import { db } from "./db";
+
 export type Network = "main" | "regtest";
 
 export function network(): Network {
@@ -83,13 +85,26 @@ export function coinSpec(symbol: string): CoinSpec | undefined {
   return COINS.find((coin) => coin.symbol === symbol);
 }
 
-/** Where block rewards go. It comes from the web app's environment so that nobody can redirect rewards from the admin area. */
-export function poolAddress(symbol: string): string | null {
-  return process.env[`POOL_ADDRESS_${symbol}`] || null;
+/**
+ * Where each coin's block rewards go. pool-core publishes an address of the pool wallet
+ * in the database; `POOL_ADDRESS_<SYMBOL>` in the web app's environment overrides it.
+ * The admin area cannot change either, so nobody can redirect rewards from there.
+ */
+export async function poolAddresses(): Promise<Record<string, string>> {
+  const { rows } = await db().query("SELECT symbol, pool_address FROM coins WHERE pool_address IS NOT NULL");
+  const addresses: Record<string, string> = Object.fromEntries(rows.map((r) => [r.symbol, r.pool_address]));
+  for (const coin of COINS) {
+    const override = process.env[`POOL_ADDRESS_${coin.symbol}`];
+    if (override) addresses[coin.symbol] = override;
+  }
+  return addresses;
 }
 
 /** The pool's configuration for one server, in the shape the stratum service reads. */
-export function nodeConfig(node: { id: number; region: string; host: string; coins: string[] }) {
+export function nodeConfig(
+  node: { id: number; region: string; host: string; coins: string[] },
+  addresses: Record<string, string>,
+) {
   const coins = node.coins.flatMap((symbol) => coinSpec(symbol) ?? []);
   const algos = [...new Set(coins.map((coin) => coin.algo))];
   return {
@@ -115,7 +130,7 @@ export function nodeConfig(node: { id: number; region: string; host: string; coi
       chain: coin.chain,
       rpc_url: `http://${coin.service}:${coin.rpcPort[network()]}`,
       rpc_user: "pool",
-      pool_address: poolAddress(coin.symbol),
+      pool_address: addresses[coin.symbol] ?? null,
       block_maturity: coin.blockMaturity,
       min_payout: coin.minPayout,
     })),

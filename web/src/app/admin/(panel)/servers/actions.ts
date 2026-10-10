@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 
 import { requireAdmin } from "@/lib/admin-auth";
-import { COINS, poolAddress } from "@/lib/catalog";
+import { COINS, poolAddresses } from "@/lib/catalog";
 import { db } from "@/lib/db";
 import { newSecret, sha256 } from "@/lib/node-auth";
 import { publicUrl } from "@/lib/public-url";
@@ -22,9 +22,10 @@ export async function addServer(_previous: AddServerState, form: FormData): Prom
   if (region.length < 1 || region.length > 40) return { error: "Give the server a region name of up to 40 characters." };
   if (!/^[A-Za-z0-9.-]{1,253}$/.test(host)) return { error: "Enter the server's public hostname or IP address." };
   if (coins.length === 0) return { error: "Choose at least one coin." };
-  const missing = coins.filter((symbol) => poolAddress(symbol) === null);
+  const addresses = await poolAddresses();
+  const missing = coins.filter((symbol) => !addresses[symbol]);
   if (missing.length > 0) {
-    return { error: `No pool address is configured for ${missing.join(", ")} (POOL_ADDRESS_<SYMBOL>).` };
+    return { error: `The pool wallet for ${missing.join(", ")} is not connected yet.` };
   }
 
   const code = newSecret();

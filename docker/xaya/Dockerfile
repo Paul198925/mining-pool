@@ -11,13 +11,14 @@ RUN apt-get update \
  && curl -fsSL -o /tmp/xaya.zip \
       "https://github.com/xaya/xaya/releases/download/v${VERSION}/xaya-1.7-linux-binaries.zip" \
  && echo "${SHA256}  /tmp/xaya.zip" | sha256sum -c - \
- && unzip -j /tmp/xaya.zip xayad xaya-cli -d /usr/local/bin \
- && chmod +x /usr/local/bin/xayad /usr/local/bin/xaya-cli \
+ && unzip -j /tmp/xaya.zip xayad xaya-cli xaya-wallet -d /usr/local/bin \
+ && chmod +x /usr/local/bin/xayad /usr/local/bin/xaya-cli /usr/local/bin/xaya-wallet \
  && rm /tmp/xaya.zip \
  && apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --uid 1000 coin \
  && mkdir /data && chown coin:coin /data
 
+COPY --chmod=755 entrypoint.sh /usr/local/bin/pool-entrypoint
 USER coin
 VOLUME /data
-ENTRYPOINT ["xayad", "-datadir=/data", "-printtoconsole"]
+ENTRYPOINT ["pool-entrypoint"]
