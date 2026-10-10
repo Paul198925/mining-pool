@@ -29,22 +29,38 @@ cd "$DIR"
 umask 077
 
 # --- enrollment -----------------------------------------------------------------------
+POOL_NODE_TOKEN=""
 if [ -f token ]; then
   POOL_NODE_TOKEN="$(cat token)"
 elif [ -f .env ] && grep -q '^POOL_NODE_TOKEN=' .env; then
   POOL_NODE_TOKEN="$(sed -n 's/^POOL_NODE_TOKEN=//p' .env)"
-  printf '%s' "$POOL_NODE_TOKEN" > token
-elif [ -n "$CODE" ]; then
+fi
+# A token from an earlier enrollment may belong to a server that was removed since.
+if [ -n "$POOL_NODE_TOKEN" ]; then
+  KNOWN="$(curl -sS -o /dev/null -w '%{http_code}' "$POOL_URL/api/node/env" -H "Authorization: Bearer $POOL_NODE_TOKEN")"
+  if [ "$KNOWN" = 401 ]; then
+    if [ -z "$CODE" ]; then
+      echo "The pool does not know this server any more. Add it again in the admin area and run the command with the new code." >&2
+      exit 1
+    fi
+    echo "This machine was enrolled before, but the pool no longer knows that server. Enrolling it anew."
+    POOL_NODE_TOKEN=""
+  elif [ "$KNOWN" != 200 ]; then
+    echo "Could not reach the pool (HTTP $KNOWN)." >&2
+    exit 1
+  elif [ -n "$CODE" ]; then
+    echo "This server is already enrolled; the code is not needed and stays unused."
+  fi
+fi
+if [ -z "$POOL_NODE_TOKEN" ]; then
+  [ -n "$CODE" ] || { echo "This server is not enrolled yet; add it in the pool's admin area to get a one-time code." >&2; exit 1; }
   echo "Enrolling with the pool..."
   REPLY="$(curl -fsS -X POST "$POOL_URL/api/node/enroll" -H 'content-type: application/json' -d "{\"code\":\"$CODE\"}")" \
     || { echo "The pool refused the code. It may be mistyped, already used or expired." >&2; exit 1; }
   POOL_NODE_TOKEN="$(printf '%s' "$REPLY" | sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p')"
   [ -n "$POOL_NODE_TOKEN" ] || { echo "Unexpected answer from the pool." >&2; exit 1; }
-  printf '%s' "$POOL_NODE_TOKEN" > token
-else
-  echo "This server is not enrolled yet; add it in the pool's admin area to get a one-time code." >&2
-  exit 1
 fi
+printf '%s' "$POOL_NODE_TOKEN" > token
 AUTH="Authorization: Bearer $POOL_NODE_TOKEN"
 printf '%s' "$POOL_URL" > pool-url
 
