@@ -65,6 +65,8 @@ export type Payout = {
 export type Credit = { symbol: string; height: number; status: Block["status"]; amount: string; foundAt: Date };
 
 export type MinerAccount = {
+  /** The account's id in the database. */
+  id: string;
   symbol: string;
   address: string;
   hashrate: number;
@@ -286,6 +288,7 @@ export async function getMiner(address: string): Promise<MinerAccount[]> {
       const worked = perCoin.filter((coin) => !coinSpec(coin.symbol)?.auxOf);
       const t = totals.rows[0];
       return {
+        id: String(id),
         symbol,
         address,
         hashrate: (worked.length > 0 ? worked : perCoin).reduce((sum, coin) => sum + coin.hashrate, 0),

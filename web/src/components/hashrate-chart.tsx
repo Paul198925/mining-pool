@@ -19,7 +19,14 @@ function niceCeil(value: number): number {
   return step * power;
 }
 
-export function HashrateChart({ points, label }: { points: HashratePoint[]; label: string }) {
+/** A coin amount with up to six significant digits. */
+function formatCoins(value: number): string {
+  return Number(value.toPrecision(6)).toLocaleString("en-US", { maximumFractionDigits: 8 });
+}
+
+/** Draws a hashrate over the last 24 hours, or with `unit` an amount of that coin. */
+export function HashrateChart({ points, label, unit }: { points: HashratePoint[]; label: string; unit?: string }) {
+  const show = (value: number) => (unit ? `${formatCoins(value)} ${unit}` : formatHashrate(value));
   const container = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<number | null>(null);
@@ -51,7 +58,7 @@ export function HashrateChart({ points, label }: { points: HashratePoint[]; labe
         ref={container}
         className="relative"
         role="img"
-        aria-label={`${label}, last 24 hours. Average ${formatHashrate(average)}, peak ${formatHashrate(peak)}.`}
+        aria-label={`${label}, last 24 hours. Average ${show(average)}, peak ${show(peak)}.`}
       >
         {/* Rendered only once the width is known, which also keeps local-time labels out of the server HTML. */}
         {width > 0 && points.length > 1 ? (
@@ -69,7 +76,7 @@ export function HashrateChart({ points, label }: { points: HashratePoint[]; labe
               <g key={tick}>
                 <line x1={MARGIN.left} x2={width - MARGIN.right} y1={y(tick)} y2={y(tick)} stroke="var(--border)" />
                 <text x={MARGIN.left - 8} y={y(tick)} dy="0.32em" textAnchor="end" fontSize={11} fill="var(--muted)">
-                  {formatHashrate(tick)}
+                  {show(tick)}
                 </text>
               </g>
             ))}
@@ -102,17 +109,18 @@ export function HashrateChart({ points, label }: { points: HashratePoint[]; labe
             className="pointer-events-none absolute top-0 rounded border border-border bg-surface px-2 py-1 shadow-sm"
             style={x(hover) > width / 2 ? { right: width - x(hover) + 10 } : { left: x(hover) + 10 }}
           >
-            <div className="font-bold">{formatHashrate(hovered.v)}</div>
+            <div className="font-bold">{show(hovered.v)}</div>
             <div className="text-muted">{time.format(new Date(hovered.t))}</div>
           </div>
         )}
       </div>
       <figcaption className="mt-2 flex gap-6 text-muted">
         <span>
-          24h average <span className="font-bold text-foreground">{formatHashrate(average)}</span>
+          {unit ? "Now" : "24h average"}{" "}
+          <span className="font-bold text-foreground">{show(unit ? (values.at(-1) ?? 0) : average)}</span>
         </span>
         <span>
-          Peak <span className="font-bold text-foreground">{formatHashrate(peak)}</span>
+          Peak <span className="font-bold text-foreground">{show(peak)}</span>
         </span>
       </figcaption>
     </figure>

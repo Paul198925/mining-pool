@@ -241,6 +241,18 @@ table.datagrid th {
   font-weight: bold;
 }
 
+/* Cells with running text, and tables with many columns: let them wrap instead of
+   making the box scroll sideways. */
+table.datagrid .wrap,
+table.datagrid.compact th {
+  white-space: normal;
+}
+
+table.datagrid .break {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 table.datagrid tbody {
   border: 1px solid #eee;
 }
