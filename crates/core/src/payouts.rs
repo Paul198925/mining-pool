@@ -125,6 +125,18 @@ async fn send(db: &PgPool, rpc: &RpcClient, coin_id: i32, coin: &Coin) -> Result
     .bind(MAX_BATCH)
     .fetch_all(db)
     .await?;
+    // One address the wallet does not accept would make it refuse the whole batch, every
+    // round. Miners' addresses were checked at login, but an admin can change one by hand.
+    let mut valid = Vec::with_capacity(pending.len());
+    for payout in pending {
+        let info: Value = rpc.call("validateaddress", json!([payout.1])).await?;
+        if info["isvalid"] == true {
+            valid.push(payout);
+        } else {
+            warn!(payout = payout.0, address = %payout.1, "payout address is not valid for this coin, leaving the payout queued");
+        }
+    }
+    let pending = valid;
     if pending.is_empty() {
         return Ok(());
     }

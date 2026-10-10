@@ -46,7 +46,7 @@ async function Miners() {
                   <b>{miner.symbol}</b>
                 </td>
                 <td>
-                  <Link href={`/wallet/${miner.address}`} className="mono">
+                  <Link href={`/admin/miners/${miner.id}`} className="mono">
                     {miner.address}
                   </Link>
                 </td>

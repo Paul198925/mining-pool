@@ -196,6 +196,8 @@ export async function getAdminBlock(id: string): Promise<{ block: AdminBlock; cr
 }
 
 export type AdminMiner = {
+  /** The account's id, for its page in the admin area. */
+  id: string;
   symbol: string;
   address: string;
   workers: number;
@@ -208,7 +210,7 @@ export type AdminMiner = {
 export async function getAdminMiners(limit: number): Promise<AdminMiner[]> {
   await requireAdmin();
   const { rows } = await db().query(
-    `SELECT c.symbol, a.payout_address AS address,
+    `SELECT a.id, c.symbol, a.payout_address AS address,
             (SELECT count(*) FROM workers w WHERE w.account_id = a.id) AS workers,
             COALESCE((SELECT sum(difficulty) FROM shares s
                       WHERE s.account_id = a.id AND s.created_at > now() - make_interval(secs => $2)), 0) * $1 / $2 AS hashrate,
@@ -221,6 +223,7 @@ export async function getAdminMiners(limit: number): Promise<AdminMiner[]> {
     [HASHES_PER_DIFF, LIVE_WINDOW_SECS, limit],
   );
   return rows.map((r) => ({
+    id: r.id,
     symbol: r.symbol,
     address: r.address,
     workers: Number(r.workers),
@@ -348,4 +351,21 @@ export async function getServerReport(id: number): Promise<{
     reportedAt: r.reported_at,
     fresh: r.fresh,
   };
+}
+
+/** The account behind an id from the miners list, or null. */
+export async function getAdminAccount(
+  id: string,
+): Promise<{ id: string; symbol: string; address: string; createdAt: Date; queued: number } | null> {
+  await requireAdmin();
+  if (!/^\d{1,18}$/.test(id)) return null;
+  const { rows } = await db().query(
+    `SELECT a.id, c.symbol, a.payout_address, a.created_at,
+            (SELECT count(*) FROM payouts p WHERE p.account_id = a.id AND p.status = 'pending') AS queued
+     FROM accounts a JOIN coins c ON c.id = a.payout_coin_id WHERE a.id = $1`,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return { id: r.id, symbol: r.symbol, address: r.payout_address, createdAt: r.created_at, queued: Number(r.queued) };
 }
