@@ -1,3 +1,5 @@
+import type { ServerReport } from "@/app/api/node/report/route";
+
 import { requireAdmin } from "./admin-auth";
 import { db } from "./db";
 
@@ -319,5 +321,31 @@ export async function getServers(): Promise<{ instances: StratumInstance[]; node
       miners: Number(r.miners),
       hashrate: r.hashrate,
     })),
+  };
+}
+
+/** One server with what it last reported about itself, or null if there is no such server. */
+export async function getServerReport(id: number): Promise<{
+  server: { id: number; region: string; host: string };
+  report: ServerReport | null;
+  reportedAt: Date | null;
+  /** The report is no older than three minutes. */
+  fresh: boolean;
+} | null> {
+  await requireAdmin();
+  const { rows } = await db().query(
+    `SELECT s.id, s.region, s.host, r.data, r.reported_at,
+            COALESCE(r.reported_at > now() - interval '3 minutes', FALSE) AS fresh
+     FROM stratum_instances s LEFT JOIN server_reports r ON r.server_id = s.id
+     WHERE s.id = $1`,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    server: { id: r.id, region: r.region, host: r.host },
+    report: r.data,
+    reportedAt: r.reported_at,
+    fresh: r.fresh,
   };
 }

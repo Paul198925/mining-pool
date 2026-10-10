@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import Link from "next/link";
 import { Suspense } from "react";
 
 import { AutoRefresh } from "@/components/auto-refresh";
@@ -111,7 +112,9 @@ async function Servers() {
               {instances.map((instance) => (
                 <tr key={instance.id}>
                   <td className="right">{instance.id}</td>
-                  <td>{instance.region}</td>
+                  <td>
+                    <Link href={`/admin/servers/${instance.id}`}>{instance.region}</Link>
+                  </td>
                   <td className="mono">{instance.host}</td>
                   <td>
                     {instance.enrollment === "manual" ? (
@@ -155,7 +158,8 @@ async function Servers() {
         )}
         <ul>
           <li>
-            Click what a server runs to change it. The change is applied when you run this on that server as root;
+            Click a server&apos;s name for its load, disk and the logs of its services. Click what a server runs to
+            change it. The change is applied when you run this on that server as root;
             the same command also updates its services to the latest version:
           </li>
         </ul>

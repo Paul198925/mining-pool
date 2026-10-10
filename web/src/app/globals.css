@@ -298,3 +298,23 @@ span.tag {
   color: #777;
   font-size: 0.85em;
 }
+
+/* A service's log in the admin area: long lines scroll sideways, many lines scroll down. */
+.logview {
+  display: flex;
+  /* Reversed, so that the scroll position starts at the bottom. */
+  flex-direction: column-reverse;
+  max-height: 420px;
+  overflow: auto;
+  background-color: #1e1e1e;
+}
+
+.logview pre {
+  margin: 0;
+  padding: 6px 8px;
+  color: #e6e6e6;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre;
+}

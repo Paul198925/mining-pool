@@ -82,6 +82,8 @@ POOL_URL="$(cat pool-url)"
 AUTH="Authorization: Bearer $(cat token)"
 WG_IF=pool0
 curl -fsS -m 20 -X POST "$POOL_URL/api/node/heartbeat" -H "$AUTH" -H 'content-type: application/json' -d '{}' >/dev/null || true
+# In the background: collecting logs takes a few seconds and must not delay the peer list.
+[ -x ./report.sh ] && (./report.sh >/dev/null 2>&1 &)
 [ -f wg-private.key ] || exit 0
 curl -fsS -m 20 "$POOL_URL/api/node/wireguard" -H "$AUTH" -o wg.new
 [ -s wg.new ] || exit 0
@@ -100,6 +102,51 @@ fi
 rm -f wg.new
 SYNC
 chmod 700 sync.sh
+
+cat > report.sh <<'REPORT'
+#!/usr/bin/env bash
+# Run every minute by sync.sh: tells the pool how this server and its services are doing,
+# with the last lines of each service's log. The pool only shows this in its admin area.
+set -uo pipefail
+cd "$(dirname "$0")"
+POOL_URL="$(cat pool-url)"
+# Sections start with a line that no log can contain by accident.
+MARK="@@$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+OUT="$(mktemp)"
+STATS="$(mktemp)"
+trap 'rm -f "$OUT" "$STATS"' EXIT
+docker stats --no-stream --format '{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}' > "$STATS" 2>/dev/null || true
+{
+  echo "$MARK"
+  echo "$MARK system"
+  echo "load=$(cut -d' ' -f1-3 /proc/loadavg)"
+  echo "cpus=$(nproc)"
+  awk '/^MemTotal:/ {print "mem_total_kb=" $2} /^MemAvailable:/ {print "mem_available_kb=" $2}' /proc/meminfo
+  df -Pk / | awk 'NR==2 {print "disk_total_kb=" $2; print "disk_used_kb=" $3}'
+  echo "uptime_secs=$(cut -d. -f1 /proc/uptime)"
+  if command -v wg >/dev/null 2>&1 && ip link show pool0 >/dev/null 2>&1; then
+    NOW="$(date +%s)"
+    echo "wg_peers=$(wg show pool0 peers | wc -l)"
+    echo "wg_peers_recent=$(wg show pool0 latest-handshakes | awk -v now="$NOW" '$2 > 0 && now - $2 < 180' | wc -l)"
+  fi
+  docker ps -a --filter label=com.docker.compose.project=pool-node \
+    --format '{{.Names}}|{{.Label "com.docker.compose.service"}}|{{.State}}|{{.Status}}|{{.Image}}' |
+    while IFS='|' read -r name service state status image; do
+      echo "$MARK service $service"
+      echo "state=$state"
+      echo "status=$status"
+      echo "image=$image"
+      awk -F'|' -v name="$name" '$1 == name {print "cpu=" $2; print "mem=" $3}' "$STATS"
+      data="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$name" 2>/dev/null)"
+      [ -n "$data" ] && echo "data_kb=$(du -sk "$data" 2>/dev/null | cut -f1)"
+      echo "$MARK logs $service"
+      docker logs --tail 150 "$name" 2>&1 | cut -c1-400
+    done
+} > "$OUT"
+curl -fsS -m 30 -X POST "$POOL_URL/api/node/report" -H "Authorization: Bearer $(cat token)" \
+  -H 'content-type: text/plain' --data-binary "@$OUT" >/dev/null
+REPORT
+chmod 700 report.sh
 
 MESH="$(curl -fsS -o /dev/null -w '%{http_code}' "$POOL_URL/api/node/wireguard" -H "$AUTH")"
 if [ "$MESH" = 200 ]; then
