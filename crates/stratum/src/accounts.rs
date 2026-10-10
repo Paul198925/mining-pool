@@ -57,7 +57,14 @@ pub async fn resolve(
         if wanted.is_some_and(|symbol| !symbol.eq_ignore_ascii_case(candidate.symbol)) {
             continue;
         }
-        let info: Value = candidate.rpc.call("validateaddress", json!([address])).await?;
+        // One daemon being away must not lock miners out of the other coins on the port.
+        let info: Value = match candidate.rpc.call("validateaddress", json!([address])).await {
+            Ok(info) => info,
+            Err(err) => {
+                tracing::warn!(coin = %candidate.symbol, "cannot check the address: {err:#}");
+                continue;
+            }
+        };
         if info["isvalid"] == true {
             chosen = Some((index, candidate.coin_id));
             break;

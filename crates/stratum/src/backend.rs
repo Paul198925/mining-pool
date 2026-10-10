@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use tracing::warn;
 
 const HEARTBEAT: Duration = Duration::from_secs(30);
+const CONFIG_CHECK: Duration = Duration::from_secs(60);
 
 /// Where logins, shares and blocks go.
 #[derive(Clone)]
@@ -36,11 +37,26 @@ impl ApiClient {
         Ok(Some(Self { http, base: base.trim_end_matches('/').to_owned(), token }))
     }
 
-    /// The configuration the pool has for this server.
-    pub async fn config(&self) -> Result<Config> {
+    /// The configuration the pool has for this server, parsed and as it was sent.
+    pub async fn config(&self) -> Result<(Config, Value)> {
         let path = "/api/node/config";
         let value: Value = self.send(self.http.get(self.url(path)), path).await?;
-        Config::from_json(value).context("the pool sent an unusable configuration")
+        let config = Config::from_json(value.clone()).context("the pool sent an unusable configuration")?;
+        Ok((config, value))
+    }
+
+    /// Resolves once the pool has a different configuration for this server than `current`.
+    pub async fn config_changed(&self, current: Value) {
+        let mut tick = tokio::time::interval(CONFIG_CHECK);
+        loop {
+            tick.tick().await;
+            // An unreachable pool is no reason to drop the miners.
+            if let Ok((_, latest)) = self.config().await
+                && latest != current
+            {
+                return;
+            }
+        }
     }
 
     pub async fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {

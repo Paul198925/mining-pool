@@ -72,26 +72,32 @@ struct Server {
 async fn main() -> Result<()> {
     pool_common::init_logging();
     // An enrolled server gets its settings from the pool; otherwise there is a config file and a database.
-    let (cfg, backend) = match ApiClient::from_env()? {
+    let (cfg, backend, sent) = match ApiClient::from_env()? {
         Some(api) => {
-            let cfg = api.config().await.context("asking the pool for this server's configuration")?;
+            let (cfg, sent) = api.config().await.context("asking the pool for this server's configuration")?;
             api.spawn_heartbeat();
-            (cfg, Backend::Api(api))
+            (cfg, Backend::Api(api), Some(sent))
         }
         None => {
             let cfg = Config::load()?;
             let db = pool_common::db::connect(&cfg).await?;
             instance::register(&db, &cfg.instance).await?;
-            (cfg, Backend::Direct(db))
+            (cfg, Backend::Direct(db), None)
         }
     };
-    ensure!(!cfg.stratum.is_empty(), "no stratum port is configured for this server");
+    if cfg.stratum.is_empty() {
+        // Normal for a fresh server: no coin has a daemon and a pool wallet yet.
+        warn!("the pool offers no coin to mine here yet, waiting for that to change");
+    }
     info!(id = cfg.instance.id, region = %cfg.instance.region, host = %cfg.instance.host, "stratum instance started");
 
     let mut recorders = Vec::new();
     for listener in &cfg.stratum {
         let coins: Vec<&Coin> = cfg.coins.iter().filter(|coin| coin.algo == listener.algo).collect();
-        ensure!(!coins.is_empty(), "no coin under [[coins]] uses algo {}", listener.algo);
+        if coins.is_empty() {
+            warn!(algo = %listener.algo, "no coin uses this algo, its port stays closed");
+            continue;
+        }
         let started = start_listener(listener, &coins, cfg.instance.id, backend.clone())
             .await
             .with_context(|| format!("starting stratum for {}", listener.algo))?;
@@ -101,8 +107,20 @@ async fn main() -> Result<()> {
         warn!(coin = %coin.symbol, algo = %coin.algo, "no [[stratum]] port for this coin's algo, it will not be mined");
     }
 
-    tokio::signal::ctrl_c().await?;
-    info!("shutting down");
+    let changed = async {
+        match (&backend, sent) {
+            (Backend::Api(api), Some(sent)) => api.config_changed(sent).await,
+            _ => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            result?;
+            info!("shutting down");
+        }
+        // Ports, difficulties and coins are fixed at startup; the supervisor starts us again.
+        _ = changed => info!("the pool changed this server's configuration, restarting to apply it"),
+    }
     for recorder in recorders {
         recorder.flush().await;
     }
@@ -155,10 +173,9 @@ async fn start_listener(
             Backend::Api(api) => (0, Sink::Api { api: api.clone(), symbol: coin.symbol.clone() }),
         };
         let rpc = RpcClient::new(coin)?;
-        let payout_script = payout_script(&rpc, coin).await.with_context(|| format!("coin {}", coin.symbol))?;
         let pool = Arc::new(Pool::default());
         let (job_tx, jobs) = watch::channel(None);
-        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, coin.template_rules.clone(), instance_id, payout_script, job_tx));
+        tokio::spawn(template::run(rpc.clone(), pool.clone(), chain, (*coin).clone(), instance_id, job_tx));
         let recorder = Recorder::spawn(sink);
         contexts.push(CoinCtx { symbol: coin.symbol.clone(), coin_id, rpc, pool, recorder, jobs });
     }
@@ -187,22 +204,6 @@ async fn start_listener(
         }
     });
     Ok(recorders)
-}
-
-/// The output script block rewards are paid to.
-async fn payout_script(rpc: &RpcClient, coin: &Coin) -> Result<Vec<u8>> {
-    let address = match &coin.pool_address {
-        Some(address) => address.clone(),
-        None => {
-            let address: String = rpc.call("getnewaddress", json!([])).await?;
-            warn!(%address, "no pool_address configured, paying rewards to a fresh daemon wallet address");
-            address
-        }
-    };
-    let info: Value = rpc.call("validateaddress", json!([address])).await?;
-    ensure!(info["isvalid"] == true, "pool address {address} is not valid for {}", coin.symbol);
-    let script = info["scriptPubKey"].as_str().context("validateaddress returned no scriptPubKey")?;
-    Ok(hex::decode(script)?)
 }
 
 async fn serve(stream: TcpStream, peer: SocketAddr, ctx: Server) -> Result<()> {
