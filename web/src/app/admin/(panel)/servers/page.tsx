@@ -1,21 +1,25 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Suspense } from "react";
 
 import { AutoRefresh } from "@/components/auto-refresh";
 import { Box, Empty, Skeleton } from "@/components/ui";
-import { getServers, type NodeStatus } from "@/lib/admin-queries";
-import { COINS, poolAddresses } from "@/lib/catalog";
+import { getServers, type NodeStatus, type StratumInstance } from "@/lib/admin-queries";
+import { COINS } from "@/lib/catalog";
 import { formatAge, formatHashrate } from "@/lib/format";
+import { meshEnabled, WG_PORT } from "@/lib/mesh";
+import { publicUrl } from "@/lib/public-url";
 
-import { removeServer } from "./actions";
-import { AddServerForm } from "./add-server-form";
+import { removeServer, updateServer } from "./actions";
+import { AddServerForm, CopyCommand, RoleChoices } from "./add-server-form";
 
 export const metadata: Metadata = { title: "Servers" };
 
 export default function ServersPage() {
   return (
     <>
-      <AutoRefresh seconds={15} />
+      {/* Slow enough to tick the boxes of a server's roles without the page reloading underneath. */}
+      <AutoRefresh seconds={60} />
       <Suspense fallback={<Skeleton height={300} />}>
         <Servers />
       </Suspense>
@@ -44,37 +48,44 @@ const ENROLLMENT_NOTE = {
   expired: "code expired, remove and add again",
 };
 
+function runs(instance: StratumInstance): string {
+  const parts = [...(instance.stratum ? ["Stratum"] : []), ...instance.coins.map((symbol) => `${symbol} node`)];
+  return parts.join(", ") || "nothing";
+}
+
 async function Servers() {
   const { instances, nodes } = await getServers();
-  const addresses = await poolAddresses();
-  const choices = COINS.map((coin) => ({
-    symbol: coin.symbol,
-    name: coin.name,
-    algo: coin.algo,
-    available: Boolean(addresses[coin.symbol]),
-  }));
+  const pool = publicUrl(await headers());
+  const choices = COINS.map((coin) => ({ symbol: coin.symbol, name: coin.name, algo: coin.algo }));
+  const mesh = meshEnabled();
   return (
     <>
       <Box title="Add a server">
         <AddServerForm coins={choices} />
         <ul>
           <li>
-            A server runs a stratum service and a daemon for each chosen coin. It needs Docker-capable Linux, the
-            stratum ports open to the internet, and enough disk for the chosen chains.
+            A server runs the stratum service, coin nodes, or both. One stratum service accepts miners for every
+            algorithm and uses the coin nodes of all servers, so a coin needs a node on only one of them.
+          </li>
+          <li>
+            It needs Docker-capable Linux and enough disk for the chosen chains.
+            {mesh
+              ? ` The servers talk to each other over a private WireGuard network: open UDP port ${WG_PORT} to the internet, and the stratum ports on servers that run stratum.`
+              : " The private network is switched off (POOL_WIREGUARD=off), so a stratum service only sees coin nodes on its own server."}
           </li>
         </ul>
       </Box>
-      <Box title="Stratum servers">
+      <Box title="Servers">
         {instances.length === 0 ? (
           <Empty>No server has been added yet.</Empty>
         ) : (
           <table className="datagrid">
             <thead>
               <tr>
-                <th className="right">Instance</th>
+                <th className="right">Id</th>
                 <th>Region</th>
                 <th>Host</th>
-                <th>Coins</th>
+                <th>Runs</th>
                 <th>State</th>
                 <th className="right">Last seen</th>
                 <th></th>
@@ -86,9 +97,30 @@ async function Servers() {
                   <td className="right">{instance.id}</td>
                   <td>{instance.region}</td>
                   <td className="mono">{instance.host}</td>
-                  <td>{instance.coins.join(", ") || "–"}</td>
+                  <td>
+                    {instance.enrollment === "manual" ? (
+                      "Stratum, set up by hand"
+                    ) : (
+                      <details>
+                        <summary>{runs(instance)}</summary>
+                        <form action={updateServer} className="grid gap-2 p-1">
+                          <input type="hidden" name="id" value={instance.id} />
+                          <RoleChoices coins={choices} stratum={instance.stratum} chosen={instance.coins} />
+                          <div>
+                            <button type="submit" className="button">
+                              Save
+                            </button>
+                          </div>
+                        </form>
+                      </details>
+                    )}
+                  </td>
                   <td>
                     <State ok={instance.live} yes="Running" no="Offline" /> {ENROLLMENT_NOTE[instance.enrollment]}
+                    {instance.updatePending && <span className="block pending">update pending</span>}
+                    {mesh && instance.enrollment === "enrolled" && !instance.meshed && (
+                      <span className="block orphaned">not in the private network</span>
+                    )}
                   </td>
                   <td className="right">{instance.live ? formatAge(instance.lastSeenAt) : "–"}</td>
                   <td className="right">
@@ -104,6 +136,13 @@ async function Servers() {
             </tbody>
           </table>
         )}
+        <ul>
+          <li>
+            Click what a server runs to change it. The change is applied when you run this on that server as root;
+            the same command also updates its services to the latest version:
+          </li>
+        </ul>
+        <CopyCommand command={`curl -fsSL ${pool}/install.sh | sudo bash -s -- ${pool}`} />
       </Box>
       <Box title="Wallet nodes, as seen by pool-core">
         <table className="datagrid">

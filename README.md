@@ -87,7 +87,7 @@ JSON-API für Miner und Dritt-Tools:
 
 ## Admin-Bereich
 
-Unter `/admin` liegt eine Übersicht für den Betreiber: Geldflüsse je Coin, Auszahlungen, Blöcke mit Aufteilung, Miner sowie Stratum-Server und Coin-Nodes. Sie zeigt nur an und löst nichts aus.
+Unter `/admin` liegt eine Übersicht für den Betreiber: Geldflüsse je Coin, Auszahlungen, Blöcke mit Aufteilung, Miner sowie Stratum-Server und Coin-Nodes. Einstellen lässt sich dort, was jeder Server ausführt, die Stratum-Ports und Schwierigkeiten sowie je Coin Mining, Gebühren und Mindestauszahlung. Auszahlungen lassen sich dort nicht auslösen und die Adresse des Pool-Wallets nicht ändern.
 
 Der Zugang hängt an der Umgebungsvariable `ADMIN_PASSWORD` der Web-App (mindestens 12 Zeichen). Ist sie nicht gesetzt, ist der Bereich abgeschaltet. Für die lokale Entwicklung steht sie in `web/.env.local`, das nicht eingecheckt wird.
 
@@ -119,9 +119,14 @@ Jeder Stratum-Server braucht eine eigene Nummer (`POOL_INSTANCE_ID`, 0 bis 255).
 
 ### Server per Einmal-Code anmelden
 
-Weitere Stratum-Server samt Coin-Nodes müssen nicht von Hand eingerichtet werden. Unter `/admin/servers` legt man einen Server an (Region, Hostname, Coins) und bekommt eine Befehlszeile mit einem Einmal-Code, die man auf dem neuen Server als root ausführt. Sie installiert Docker, meldet den Server beim Pool an und startet den Stratum-Dienst und die gewählten Coin-Nodes.
+Weitere Server müssen nicht von Hand eingerichtet werden. Unter `/admin/servers` legt man einen Server an (Region, Hostname) und wählt, was er ausführt: den Stratum-Dienst, Coin-Nodes oder beides. Dafür bekommt man eine Befehlszeile mit einem Einmal-Code, die man auf dem neuen Server als root ausführt. Sie installiert Docker und WireGuard, meldet den Server beim Pool an und startet die gewählten Dienste.
 
-Ein so angemeldeter Server hat keinen Datenbankzugang. Er liefert Logins, Shares und Blöcke über die Schnittstelle `/api/node/*` der Website ab und weist sich mit einem eigenen Schlüssel aus, den nur er kennt. Die Coin-Nodes laufen dort ohne Wallet, und ihr RPC-Passwort wird auf dem Server erzeugt und verlässt ihn nicht. „Remove" im Admin-Bereich sperrt den Schlüssel sofort.
+- **Ein Stratum-Dienst bedient alle Algorithmen**, jeden auf seinem Port, und nutzt dafür die Coin-Nodes aller Server. Eine Coin braucht also nur auf einem Server einen Node.
+- **Die Server bilden ein privates WireGuard-Netz** (`10.77.0.0/24`, die letzte Stelle ist die Nummer des Servers). Die Coin-Nodes nehmen RPC nur aus diesem Netz an. Jeder Server erzeugt seinen WireGuard-Schlüssel selbst; der Pool verteilt nur die öffentlichen Schlüssel, und die Server holen sich die Liste der anderen jede Minute. Nach außen offen sein müssen nur UDP 51820 und, auf Stratum-Servern, die Stratum-Ports.
+- **Ändern:** Was ein Server ausführt, stellt man unter `/admin/servers` um. Wirksam wird es, wenn man auf dem Server den dort angezeigten Update-Befehl ausführt (`curl -fsSL <Pool>/install.sh | sudo bash -s -- <Pool>`); derselbe Befehl aktualisiert die Dienste auf die neueste Version.
+- **Stratum-Ports und Schwierigkeiten** je Algorithmus stehen unter `/admin/stratum`, **Coins** (Mining an/aus, Gebühren, Mindestauszahlung) unter `/admin/coins`. Die Stratum-Dienste übernehmen solche Änderungen innerhalb etwa einer Minute selbst und starten dafür neu. Nur nach einer Port-Änderung ist der Update-Befehl nötig, damit die Firewall den neuen Port öffnet.
+
+Ein so angemeldeter Server hat keinen Datenbankzugang. Er liefert Logins, Shares und Blöcke über die Schnittstelle `/api/node/*` der Website ab und weist sich mit einem eigenen Schlüssel aus, den nur er kennt. Die Coin-Nodes laufen dort ohne Wallet. Ihr RPC-Passwort ist für den ganzen Pool dasselbe, weil ein Stratum-Dienst auch die Nodes anderer Server anspricht; der Pool erzeugt es und gibt es nur an angemeldete Server. „Remove" im Admin-Bereich sperrt den Schlüssel sofort, und die anderen Server streichen den Server innerhalb einer Minute aus ihrem Netz.
 
 Die Web-App braucht dafür zusätzlich:
 
@@ -131,8 +136,11 @@ Die Web-App braucht dafür zusätzlich:
 | `POOL_IMAGE_PREFIX` | Präfix der Images, z. B. `ghcr.io/<konto>/pool` für `...-stratum`, `...-dogecoin`, `...-spacexpanse`, `...-rincoin` |
 | `POOL_ADDRESS_<SYMBOL>` | optional: überschreibt die Adresse, die `pool-core` aus dem Pool-Wallet veröffentlicht |
 | `POOL_NETWORK` | `regtest` nur für Tests, sonst weglassen |
+| `POOL_WIREGUARD` | `off` nur für Tests auf einem einzigen Docker-Host; dann sieht ein Stratum-Dienst nur die Nodes seines eigenen Servers |
 
-Eine Coin lässt sich erst auswählen, wenn `pool-core` ihren Wallet-Node erreicht und eine Adresse des Pool-Wallets veröffentlicht hat. Der Wallet-Node läuft mit `POOL_WALLET=<Name>`; damit legt das Image das Wallet beim ersten Start an.
+Einen Node kann man für jede Coin starten. Gemint wird eine Coin aber erst, wenn `pool-core` ihren Wallet-Node erreicht und eine Adresse des Pool-Wallets veröffentlicht hat, denn dorthin gehen die Block-Belohnungen. Der Wallet-Node läuft mit `POOL_WALLET=<Name>`; damit legt das Image das Wallet beim ersten Start an.
+
+Gebühren und Mindestauszahlung aus `config/production.toml` sind nur Startwerte: sobald eine Coin in der Datenbank steht, gilt, was unter `/admin/coins` eingestellt ist.
 
 Welche Coins es gibt und wie ihre Nodes gestartet werden, steht in `web/src/lib/catalog.ts`.
 

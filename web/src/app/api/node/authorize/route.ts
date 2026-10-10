@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { authenticateNode, badRequest, unauthorized } from "@/lib/node-auth";
+import { authenticateNode, badRequest, mayServe, unauthorized } from "@/lib/node-auth";
 
 /**
  * Registers a miner login. The server has already checked the address with its own
@@ -11,8 +11,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const { symbol, address, worker, solo, party_key_hash: partyKeyHash } = body ?? {};
   if (
-    typeof symbol !== "string" ||
-    !node.coins.includes(symbol) ||
+    !(await mayServe(node, symbol)) ||
     typeof address !== "string" ||
     !/^[A-Za-z0-9]{20,100}$/.test(address) ||
     typeof worker !== "string" ||
